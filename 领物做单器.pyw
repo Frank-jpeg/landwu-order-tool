@@ -149,7 +149,7 @@ WAYBILL_MONITORED_STATUSES = (3, 4, 5, 6)
 WAYBILL_FAILED_EXPRESS_STATUS = 3
 LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
-APP_VERSION = "1.0.4"
+APP_VERSION = "2026.08.01.7"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "领物做单器.pyw"
@@ -2402,6 +2402,17 @@ class LandwuGuiApp:
         )
         self.style.map("Accent.TButton", background=[("active", "#0B5ED7"), ("disabled", "#9EC5FE")])
         self.style.configure(
+            "Match.TButton",
+            font=("Microsoft YaHei UI", 11, "bold"),
+            padding=(18, 7),
+            foreground="#FFFFFF",
+            background="#16A34A",
+            bordercolor="#16A34A",
+            lightcolor="#16A34A",
+            darkcolor="#16A34A",
+        )
+        self.style.map("Match.TButton", background=[("active", "#15803D"), ("disabled", "#86EFAC")])
+        self.style.configure(
             "Danger.TButton",
             font=("Microsoft YaHei UI", 9, "bold"),
             foreground="#FFFFFF",
@@ -4047,25 +4058,37 @@ class LandwuGuiApp:
             value=(
                 "当前无待付款订单，可先选择并保存成分数据库目录。"
                 if not items
-                else "可手填目标尺码，也可以导入订单成分匹配结果表自动填写。提交时使用“全部关联”。"
+                else "可手填目标尺码；优先选择成分数据库目录后点击“开始匹配”。提交时使用“全部关联”。"
             )
         )
         views: list[dict[str, Any]] = []
 
         toolbar = ttk.Frame(window)
         toolbar.pack(fill="x", padx=8, pady=8)
-        ttk.Label(toolbar, text="成分表").pack(side="left")
-        ttk.Entry(toolbar, textvariable=file_var).pack(side="left", fill="x", expand=True, padx=6)
-        ttk.Button(toolbar, text="选择表格", command=lambda: self._choose_composition_file(file_var)).pack(side="left", padx=(0, 6))
-        ttk.Button(toolbar, text="导入表格快速填写", command=lambda: self._apply_composition_to_size_views(file_var.get(), views, status_var)).pack(
+        ttk.Label(toolbar, text="数据库目录").pack(side="left")
+        ttk.Entry(toolbar, textvariable=self.composition_db_folder_var, state="readonly").pack(
+            side="left", fill="x", expand=True, padx=6
+        )
+        ttk.Button(toolbar, text="选择数据库文件夹", command=lambda: self._choose_composition_db_folder(status_var), style="Ghost.TButton").pack(
             side="left", padx=(0, 6)
         )
-        ttk.Button(toolbar, text="选择数据库文件夹", command=lambda: self._choose_composition_db_folder(status_var)).pack(
+        ttk.Button(toolbar, text="开始匹配", command=lambda: self._apply_saved_db_composition(views, status_var), style="Match.TButton").pack(
+            side="left", padx=(2, 0)
+        )
+
+        legacy_toolbar = ttk.Frame(window)
+        legacy_toolbar.pack(fill="x", padx=8, pady=(0, 4))
+        ttk.Label(legacy_toolbar, text="旧版表格导入（通常不需要）").pack(side="left")
+        ttk.Entry(legacy_toolbar, textvariable=file_var).pack(side="left", fill="x", expand=True, padx=6)
+        ttk.Button(legacy_toolbar, text="选择表格", command=lambda: self._choose_composition_file(file_var), style="Ghost.TButton").pack(
             side="left", padx=(0, 6)
         )
-        ttk.Button(toolbar, text="开始匹配", command=lambda: self._apply_saved_db_composition(views, status_var)).pack(
-            side="left"
-        )
+        ttk.Button(
+            legacy_toolbar,
+            text="导入表格快速填写",
+            command=lambda: self._apply_composition_to_size_views(file_var.get(), views, status_var),
+            style="Ghost.TButton",
+        ).pack(side="left")
 
         status_label = ttk.Label(window, textvariable=status_var, background="#F8F9FA", foreground="#6C757D")
         status_label.pack(fill="x", padx=8, pady=(0, 6))
