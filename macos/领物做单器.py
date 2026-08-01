@@ -91,7 +91,7 @@ def get_app_runtime_dir() -> Path:
 
 
 def get_default_auth_state_file() -> Path:
-    return get_app_runtime_dir() / "auth-state-v1.json"
+    return Path.home() / "Library" / "Application Support" / "领物做单器" / "auth-state-v1.json"
 
 
 def open_path(path_or_url: Any) -> None:
@@ -102,10 +102,10 @@ def open_path(path_or_url: Any) -> None:
     subprocess.Popen(["open", target])
 
 
-DEFAULT_SHORTCUT = r"C:\AI用览器.lnk"
+DEFAULT_SHORTCUT = ""
 DEFAULT_DEBUG_PORT = 18800
-DEFAULT_COMPOSITION_XLSX = r"C:\Users\Administrator\Desktop\ceshi333_订单成分匹配结果_v7.xlsx"
-COMPOSITION_DB_FOLDER = Path(r"D:\匹配数据库文件夹")
+DEFAULT_COMPOSITION_XLSX = ""
+COMPOSITION_DB_FOLDER = Path.home() / "Documents"
 COMPOSITION_DB_SUFFIXES = {".csv", ".xlsx", ".xlsm"}
 COMPOSITION_DB_JOIN_FIELDS = ("SKC_ID", "SPU_ID", "SKU")
 DEFAULT_AUTH_STATE_FILE = str(get_default_auth_state_file())
@@ -116,8 +116,6 @@ AUTH_SOURCE_BROWSER = "browser"
 AUTH_SOURCE_FILE = "file"
 DEFAULT_AUTH_SOURCE = AUTH_SOURCE_FILE
 AUTH_SOURCE_LABELS = {
-    "自动（文件优先）": AUTH_SOURCE_AUTO,
-    "浏览器读取": AUTH_SOURCE_BROWSER,
     "本地同步文件": AUTH_SOURCE_FILE,
 }
 DEFAULT_ORDER_URLS = [
@@ -138,10 +136,222 @@ WAYBILL_MONITORED_STATUSES = (3, 4, 5, 6)
 WAYBILL_FAILED_EXPRESS_STATUS = 3
 LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
-APP_VERSION = "2026.0801.1"
+APP_VERSION = "2026.08.01.2"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "macos/领物做单器.py"
+
+LANDWU_AUTH_SYNC_USERSCRIPT = r"""// ==UserScript==
+// @name         Landwu-桥接同步登录态-双兼容18888_18321-v7
+// @namespace    https://user.landwu.com/
+// @version      2026.04.17.2
+// @description  无感自动同步当前 Landwu 登录态到本地速卖通专用上传器(18888)和领物TEMU上传器(18321)
+// @match        https://user.landwu.com/*
+// @grant        GM_xmlhttpRequest
+// @connect      127.0.0.1
+// @run-at       document-idle
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  const LOCAL_SERVERS = [
+    { url: 'http://127.0.0.1:18888', label: '速卖通18888' },
+    { url: 'http://127.0.0.1:18321', label: 'TEMU18321' },
+  ];
+  const BADGE_ID = 'landwu-bridge-badge-v7-dual';
+  let lastFingerprint = '';
+  let collapseTimer = null;
+  let lastStatusKey = '';
+
+  function readAuth() {
+    const token = localStorage.getItem('access_token') || '';
+    const userInfo = JSON.parse(localStorage.getItem('user_info') || '{}');
+    const sessionMatch = document.cookie.match(/(?:^|;\s*)(laravel_session=[^;]+)/);
+
+    return {
+      token,
+      factoryId: userInfo.factory_id ? String(userInfo.factory_id) : '',
+      masterFactoryId: userInfo.factory_id ? `6${userInfo.factory_id}` : '',
+      session: sessionMatch ? sessionMatch[1] : '',
+      username: userInfo.username || userInfo.nickname || '',
+      companyName: userInfo.company_name || '',
+      source: 'scriptcat-auto',
+    };
+  }
+
+  function getFingerprint(auth) {
+    return [auth.token, auth.factoryId, auth.masterFactoryId, auth.username].join('|');
+  }
+
+  function expandBadge() {
+    const badge = document.getElementById(BADGE_ID);
+    if (!badge) return;
+    badge.dataset.collapsed = '0';
+    badge.style.transform = 'translateX(0)';
+    badge.style.opacity = '0.96';
+  }
+
+  function collapseBadge() {
+    const badge = document.getElementById(BADGE_ID);
+    if (!badge) return;
+    badge.dataset.collapsed = '1';
+    badge.style.transform = 'translateX(calc(100% - 16px))';
+    badge.style.opacity = '0.76';
+  }
+
+  function getBadge() {
+    let badge = document.getElementById(BADGE_ID);
+    if (badge) return badge;
+
+    badge = document.createElement('div');
+    badge.id = BADGE_ID;
+    badge.style.cssText = [
+      'position:fixed',
+      'right:10px',
+      'bottom:12px',
+      'z-index:999999',
+      'width:220px',
+      'background:rgba(17,24,39,.88)',
+      'color:#fff',
+      'padding:6px 10px',
+      'border-radius:10px',
+      'font-size:12px',
+      'line-height:1.4',
+      'box-shadow:0 8px 24px rgba(0,0,0,.18)',
+      'opacity:.96',
+      'transition:transform .22s ease, opacity .22s ease',
+      'pointer-events:auto',
+      'cursor:default',
+      'white-space:normal',
+      'word-break:break-all',
+      'user-select:none',
+    ].join(';');
+    badge.addEventListener('mouseenter', () => {
+      if (collapseTimer) {
+        clearTimeout(collapseTimer);
+        collapseTimer = null;
+      }
+      expandBadge();
+    });
+    badge.addEventListener('mouseleave', () => {
+      if (badge.dataset.canCollapse === '1') {
+        collapseBadge();
+      }
+    });
+    document.body.appendChild(badge);
+    return badge;
+  }
+
+  function setBadge(text, color = '#16a34a', options = {}) {
+    const {
+      autoCollapse = true,
+      collapseDelay = 2200,
+      keepExpanded = false,
+      statusKey = '',
+      silentIfSame = false,
+    } = options;
+
+    if (statusKey) {
+      if (silentIfSame && lastStatusKey === statusKey) return;
+      lastStatusKey = statusKey;
+    }
+
+    const badge = getBadge();
+    if (collapseTimer) {
+      clearTimeout(collapseTimer);
+      collapseTimer = null;
+    }
+
+    badge.textContent = text;
+    badge.style.border = `1px solid ${color}`;
+    badge.dataset.canCollapse = keepExpanded ? '0' : '1';
+    expandBadge();
+
+    if (autoCollapse && !keepExpanded) {
+      collapseTimer = setTimeout(() => {
+        collapseBadge();
+      }, collapseDelay);
+    }
+  }
+
+  function postAuth(server, auth) {
+    return new Promise((resolve) => {
+      GM_xmlhttpRequest({
+        method: 'POST',
+        url: `${server.url}/api/auth/sync`,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        data: JSON.stringify(auth),
+        onload: (response) => {
+          try {
+            const json = JSON.parse(response.responseText || '{}');
+            if (!json.ok) {
+              resolve({ ok: false, server, reason: 'sync-failed' });
+              return;
+            }
+            resolve({ ok: true, server, json });
+          } catch (error) {
+            resolve({ ok: false, server, reason: 'parse-failed' });
+          }
+        },
+        onerror: () => {
+          resolve({ ok: false, server, reason: 'connect-failed' });
+        },
+      });
+    });
+  }
+
+  async function syncAuth(force = false) {
+    const auth = readAuth();
+    if (!auth.token || !auth.factoryId) {
+      setBadge('桥接登录态：未登录', '#dc2626', {
+        autoCollapse: true,
+        collapseDelay: 1800,
+        statusKey: 'not-logged-in',
+        silentIfSame: !force,
+      });
+      return;
+    }
+
+    const fingerprint = getFingerprint(auth);
+    if (!force && fingerprint === lastFingerprint) {
+      return;
+    }
+
+    const results = await Promise.all(LOCAL_SERVERS.map((server) => postAuth(server, auth)));
+    const successTargets = results.filter((item) => item.ok);
+
+    if (successTargets.length) {
+      lastFingerprint = fingerprint;
+      const targetsText = successTargets.map((item) => item.server.label).join(' + ');
+      setBadge(`桥接登录态：已同步到 ${targetsText} ${auth.username || auth.companyName || ''}`, '#16a34a', {
+        autoCollapse: true,
+        collapseDelay: 2200,
+        statusKey: `synced:${targetsText}:${auth.username || auth.companyName || ''}`,
+      });
+      return;
+    }
+
+    setBadge('桥接登录态：本地服务未启动', '#dc2626', {
+      autoCollapse: true,
+      collapseDelay: 1500,
+      statusKey: 'service-offline',
+      silentIfSame: !force,
+    });
+  }
+
+  function boot() {
+    syncAuth(true);
+    setInterval(() => syncAuth(false), 15000);
+    window.addEventListener('focus', () => syncAuth(false));
+    window.addEventListener('storage', () => syncAuth(true));
+  }
+
+  setTimeout(boot, 1200);
+})();
+"""
 
 
 def setup_stdio() -> None:
@@ -1982,29 +2192,12 @@ def with_browser_session(args: argparse.Namespace, worker) -> Any:
 
 
 def with_landwu_session(args: argparse.Namespace, worker) -> Any:
-    auth_source = str(getattr(args, "auth_source", AUTH_SOURCE_AUTO) or AUTH_SOURCE_AUTO)
-    if auth_source == AUTH_SOURCE_FILE:
-        return with_auth_file_session(args, worker)
-    if auth_source == AUTH_SOURCE_BROWSER:
-        return with_browser_session(args, worker)
-
-    try:
-        return with_auth_file_session(args, worker)
-    except Exception as exc:  # noqa: BLE001
-        if not looks_like_auth_error(exc):
-            raise
-        return with_browser_session(args, worker)
+    return with_auth_file_session(args, worker)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(add_help=True, description="Landwu 浏览器做单脚本（Python 单文件版）")
-    parser.add_argument("--shortcut", default=DEFAULT_SHORTCUT)
-    parser.add_argument("--browser-path")
-    parser.add_argument("--user-data-dir")
-    parser.add_argument("--profile-directory")
-    parser.add_argument("--debug-port", type=int, default=DEFAULT_DEBUG_PORT)
-    parser.add_argument("--close-on-finish", action="store_true")
-    parser.add_argument("--auth-source", choices=[AUTH_SOURCE_AUTO, AUTH_SOURCE_BROWSER, AUTH_SOURCE_FILE], default=DEFAULT_AUTH_SOURCE)
+    parser = argparse.ArgumentParser(add_help=True, description="Landwu 做单脚本（macOS 单文件版）")
+    parser.add_argument("--auth-source", choices=[AUTH_SOURCE_FILE], default=DEFAULT_AUTH_SOURCE)
     parser.add_argument("--auth-file", default=DEFAULT_AUTH_STATE_FILE)
 
     sub = parser.add_subparsers(dest="command")
@@ -2049,22 +2242,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def build_runtime_args(
     *,
-    shortcut: str = DEFAULT_SHORTCUT,
-    browser_path: str | None = None,
-    user_data_dir: str | None = None,
-    profile_directory: str | None = None,
-    debug_port: int = DEFAULT_DEBUG_PORT,
-    close_on_finish: bool = False,
     auth_source: str = DEFAULT_AUTH_SOURCE,
     auth_file: str = DEFAULT_AUTH_STATE_FILE,
 ) -> argparse.Namespace:
     return argparse.Namespace(
-        shortcut=shortcut,
-        browser_path=browser_path,
-        user_data_dir=user_data_dir,
-        profile_directory=profile_directory,
-        debug_port=debug_port,
-        close_on_finish=close_on_finish,
         auth_source=auth_source,
         auth_file=auth_file,
     )
@@ -2080,9 +2261,6 @@ class LandwuGuiApp:
         self.style = ttk.Style()
         self._setup_style()
 
-        self.shortcut_var = tk.StringVar(value=DEFAULT_SHORTCUT)
-        self.debug_port_var = tk.StringVar(value=str(DEFAULT_DEBUG_PORT))
-        self.auth_source_var = tk.StringVar(value="本地同步文件")
         self.auth_file_var = tk.StringVar(value=DEFAULT_AUTH_STATE_FILE)
         self.output_dir_var = tk.StringVar(value=str(get_default_output_dir()))
         self.status_var = tk.StringVar(value="待命")
@@ -2906,7 +3084,6 @@ class LandwuGuiApp:
         )
         if chosen:
             self.auth_file_var.set(chosen)
-            self.auth_source_var.set("本地同步文件")
 
     def _start_auth_sync_receiver(self) -> None:
         ports = self.auth_sync_receiver.start()
@@ -2947,7 +3124,7 @@ class LandwuGuiApp:
         username = auth.get("username") or auth.get("companyName") or "-"
         message = f"登录态已同步：{username}，端口 {port}，文件 {auth_file}；接收服务已关闭"
         try:
-            self.root.after(0, lambda: (self._stop_auth_sync_receiver(message), self.auth_source_var.set("自动（文件优先）")))
+            self.root.after(0, lambda: self._stop_auth_sync_receiver(message))
         except Exception:
             pass
 
@@ -2956,21 +3133,31 @@ class LandwuGuiApp:
             "登录态说明",
             "\n".join(
                 [
-                    "默认使用“自动（文件优先）”：",
-                    "1. 先读取同步文件 auth-state-v1.json，直接发接口，不打开浏览器。",
-                    "2. 文件不存在、token 过期或鉴权失败时，再回退到浏览器读取。",
+                    "macOS 版本仅使用本地同步文件，不读取浏览器登录态：",
+                    "1. 点击“接收登录态3分钟”启动本机接收服务。",
+                    "2. 点击“一键复制同步脚本”，粘贴到 Tampermonkey 后保存并启用。",
                     "",
                     "如何生成同步文件：",
-                    "1. 在浏览器安装/启用 Landwu 登录态同步 userscript。",
-                    "2. 在本做单助手设置里点“接收登录态3分钟”。",
-                    "3. 打开 https://user.landwu.com/ 并登录。",
-                    "4. 页面右下角提示“桥接登录态：已同步”后，就会写入当前同步文件，并自动关闭接收服务。",
+                    "1. 在浏览器打开 https://user.landwu.com/ 并登录。",
+                    "2. 页面右下角提示“桥接登录态：已同步”后，就会写入当前同步文件。",
                     "",
                     "注意：",
                     "auth-state-v1.json 等同登录凭证，不要发给无关人员。",
                     "如果刷新订单提示登录失效，重新打开 Landwu 页面同步一次即可。",
                 ]
             ),
+        )
+
+    def copy_auth_sync_userscript(self) -> None:
+        self.root.clipboard_clear()
+        self.root.clipboard_append(LANDWU_AUTH_SYNC_USERSCRIPT)
+        self.root.update_idletasks()
+        self.status_var.set("登录态同步 userscript 已复制到剪贴板")
+        self._log("已复制内置 Landwu 登录态同步 userscript。")
+        messagebox.showinfo(
+            "已复制同步脚本",
+            "请在 Tampermonkey 新建脚本，粘贴后保存并启用。\n\n"
+            "随后点击“接收登录态3分钟”，再打开或刷新 Landwu 页面即可同步。",
         )
 
     def check_for_update(self) -> None:
@@ -3041,8 +3228,8 @@ class LandwuGuiApp:
         window = tk.Toplevel(self.root)
         self.settings_window = window
         window.title("设置")
-        window.geometry("820x360")
-        window.minsize(760, 320)
+        window.geometry("820x390")
+        window.minsize(760, 350)
         window.configure(background="#EEF2F6")
         window.transient(self.root)
 
@@ -3056,34 +3243,29 @@ class LandwuGuiApp:
         form.pack(fill="both", expand=True, padx=10, pady=10)
         form.columnconfigure(1, weight=1)
 
-        ttk.Label(form, text="浏览器快捷方式").grid(row=0, column=0, sticky="w", pady=4)
-        ttk.Entry(form, textvariable=self.shortcut_var).grid(row=0, column=1, columnspan=3, sticky="ew", padx=(8, 0), pady=4)
-        ttk.Label(form, text="调试端口").grid(row=0, column=4, sticky="w", padx=(12, 4), pady=4)
-        ttk.Entry(form, textvariable=self.debug_port_var, width=8).grid(row=0, column=5, sticky="w", pady=4)
+        ttk.Label(form, text="图片目录").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Entry(form, textvariable=self.output_dir_var).grid(row=0, column=1, columnspan=3, sticky="ew", padx=(8, 0), pady=4)
+        ttk.Button(form, text="选择目录", command=self._choose_output_dir).grid(row=0, column=4, columnspan=2, sticky="w", padx=(12, 0), pady=4)
 
-        ttk.Label(form, text="图片目录").grid(row=1, column=0, sticky="w", pady=4)
-        ttk.Entry(form, textvariable=self.output_dir_var).grid(row=1, column=1, columnspan=3, sticky="ew", padx=(8, 0), pady=4)
-        ttk.Button(form, text="选择目录", command=self._choose_output_dir).grid(row=1, column=4, columnspan=2, sticky="w", padx=(12, 0), pady=4)
+        ttk.Label(form, text="登录态来源").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Label(form, text="本地同步文件", background="#FFFFFF", foreground="#495057").grid(row=1, column=1, sticky="w", padx=(8, 0), pady=4)
+        ttk.Button(form, text="登录态说明", command=self.show_auth_help).grid(row=1, column=2, sticky="w", padx=(8, 0), pady=4)
+        ttk.Button(form, text="查看登录态", command=self.fetch_auth).grid(row=1, column=3, sticky="w", padx=(8, 0), pady=4)
+        ttk.Label(form, text="下单余额").grid(row=1, column=4, sticky="e", padx=(12, 4), pady=4)
+        ttk.Label(form, textvariable=self.balance_var, style="SettingsBalance.TLabel").grid(row=1, column=5, sticky="w", pady=4)
 
-        ttk.Label(form, text="登录态来源").grid(row=2, column=0, sticky="w", pady=4)
-        auth_source = ttk.Combobox(
-            form,
-            textvariable=self.auth_source_var,
-            values=tuple(AUTH_SOURCE_LABELS.keys()),
-            width=16,
-            state="readonly",
-        )
-        auth_source.grid(row=2, column=1, sticky="w", padx=(8, 0), pady=4)
-        ttk.Button(form, text="登录态说明", command=self.show_auth_help).grid(row=2, column=2, sticky="w", padx=(8, 0), pady=4)
-        ttk.Button(form, text="查看登录态", command=self.fetch_auth).grid(row=2, column=3, sticky="w", padx=(8, 0), pady=4)
-        ttk.Label(form, text="下单余额").grid(row=2, column=4, sticky="e", padx=(12, 4), pady=4)
-        ttk.Label(form, textvariable=self.balance_var, style="SettingsBalance.TLabel").grid(row=2, column=5, sticky="w", pady=4)
-
-        ttk.Label(form, text="同步文件").grid(row=3, column=0, sticky="w", pady=4)
-        ttk.Entry(form, textvariable=self.auth_file_var).grid(row=3, column=1, columnspan=2, sticky="ew", padx=(8, 0), pady=4)
-        ttk.Button(form, text="选择文件", command=self._choose_auth_file).grid(row=3, column=3, sticky="w", padx=(8, 0), pady=4)
+        ttk.Label(form, text="同步文件").grid(row=2, column=0, sticky="w", pady=4)
+        ttk.Entry(form, textvariable=self.auth_file_var).grid(row=2, column=1, columnspan=2, sticky="ew", padx=(8, 0), pady=4)
+        ttk.Button(form, text="选择文件", command=self._choose_auth_file).grid(row=2, column=3, sticky="w", padx=(8, 0), pady=4)
         ttk.Button(form, text="接收登录态3分钟", command=self._start_auth_sync_receiver).grid(
-            row=3, column=4, columnspan=2, sticky="w", padx=(8, 0), pady=4
+            row=2, column=4, columnspan=2, sticky="w", padx=(8, 0), pady=4
+        )
+        ttk.Label(form, text="同步脚本").grid(row=3, column=0, sticky="w", pady=4)
+        ttk.Button(form, text="一键复制同步脚本", command=self.copy_auth_sync_userscript).grid(
+            row=3, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=4
+        )
+        ttk.Label(form, text="复制后粘贴到 Tampermonkey 并启用。", background="#FFFFFF", foreground="#6C757D").grid(
+            row=3, column=3, columnspan=3, sticky="w", padx=(8, 0), pady=4
         )
         ttk.Label(form, textvariable=self.auth_sync_status_var, background="#FFFFFF", foreground="#6C757D").grid(
             row=4, column=1, columnspan=5, sticky="w", padx=(8, 0), pady=(0, 4)
@@ -3210,19 +3392,9 @@ class LandwuGuiApp:
         except Exception:
             pass
 
-    def _parse_debug_port(self) -> int:
-        raw = self.debug_port_var.get().strip() or str(DEFAULT_DEBUG_PORT)
-        return int(raw)
-
     def _make_runtime_args(self, *, allow_browser_fallback: bool = True) -> argparse.Namespace:
-        auth_source = AUTH_SOURCE_LABELS.get(self.auth_source_var.get().strip(), AUTH_SOURCE_AUTO)
-        if not allow_browser_fallback and auth_source == AUTH_SOURCE_AUTO:
-            auth_source = AUTH_SOURCE_FILE
         return build_runtime_args(
-            shortcut=self.shortcut_var.get().strip() or DEFAULT_SHORTCUT,
-            debug_port=self._parse_debug_port(),
-            close_on_finish=False,
-            auth_source=auth_source,
+            auth_source=AUTH_SOURCE_FILE,
             auth_file=self.auth_file_var.get().strip() or DEFAULT_AUTH_STATE_FILE,
         )
 
@@ -4063,7 +4235,7 @@ class LandwuGuiApp:
         ttk.Button(toolbar, text="导入表格快速填写", command=lambda: self._apply_composition_to_size_views(file_var.get(), views, status_var)).pack(
             side="left", padx=(0, 6)
         )
-        ttk.Button(toolbar, text="从D盘数据库匹配", command=lambda: self._apply_db_composition_to_size_views(views, status_var)).pack(
+        ttk.Button(toolbar, text="选择数据库文件夹匹配", command=lambda: self._choose_and_apply_db_composition(views, status_var)).pack(
             side="left"
         )
 
@@ -4162,11 +4334,16 @@ class LandwuGuiApp:
     def _choose_composition_file(self, file_var: tk.StringVar) -> None:
         chosen = filedialog.askopenfilename(
             title="选择订单成分匹配结果表",
-            initialdir=str(Path(DEFAULT_COMPOSITION_XLSX).parent),
+            initialdir=str(Path.home() / "Documents"),
             filetypes=[("Excel 文件", "*.xlsx"), ("所有文件", "*.*")],
         )
         if chosen:
             file_var.set(chosen)
+
+    def _choose_and_apply_db_composition(self, views: list[dict[str, Any]], status_var: tk.StringVar) -> None:
+        chosen = filedialog.askdirectory(title="选择成分数据库文件夹", initialdir=str(COMPOSITION_DB_FOLDER))
+        if chosen:
+            self._apply_db_composition_to_size_views(views, status_var, Path(chosen))
 
     def _mark_size_view_after_manual_edit(self, view: dict[str, Any]) -> None:
         target = str(view["target"].get() or "").strip()
@@ -4233,7 +4410,12 @@ class LandwuGuiApp:
             message += f"，冲突 {len(conflicts)}"
         status_var.set(message)
 
-    def _apply_db_composition_to_size_views(self, views: list[dict[str, Any]], status_var: tk.StringVar) -> None:
+    def _apply_db_composition_to_size_views(
+        self,
+        views: list[dict[str, Any]],
+        status_var: tk.StringVar,
+        db_folder: Path,
+    ) -> None:
         query_values: list[str] = []
         for view in views:
             item = view["item"]
@@ -4243,11 +4425,11 @@ class LandwuGuiApp:
                 if key:
                     query_values.append(key)
         try:
-            status_var.set(f"正在读取数据库：{COMPOSITION_DB_FOLDER}")
+            status_var.set(f"正在读取数据库：{db_folder}")
             self.root.update_idletasks()
-            payload = load_composition_db_mapping(query_values)
+            payload = load_composition_db_mapping(query_values, db_folder=db_folder)
         except Exception as exc:  # noqa: BLE001
-            messagebox.showerror("D盘数据库匹配", str(exc))
+            messagebox.showerror("成分数据库匹配", str(exc))
             return
 
         mapping = payload["mapping"]
@@ -4293,7 +4475,7 @@ class LandwuGuiApp:
 
         skipped = payload.get("skippedFiles") or []
         message = (
-            f"D盘数据库匹配完成：匹配 {matched}，可修改 {changed}，相同 {same}，"
+            f"成分数据库匹配完成：匹配 {matched}，可修改 {changed}，相同 {same}，"
             f"未匹配 {no_sku}，无法识别 {no_target}；读取 {payload.get('dbFileCount') or 0} 个文件"
         )
         if skipped:
