@@ -1,0 +1,4 @@
+__pycache__/
+*.error.log
+*.download
+auth-state-v1.json
