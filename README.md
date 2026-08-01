@@ -24,7 +24,7 @@ python3 macos/领物做单器.py
 
 ## 更新
 
-两个版本的“设置”中均有“检查更新”。它会通过 HTTPS 直接读取公开仓库的源码，不要求安装 GitHub CLI 或登录 GitHub：
+两个版本的“设置”中均有“检查更新”。它会通过 HTTPS 从[公开仓库](https://github.com/Frank-jpeg/landwu-order-tool)直接读取对应源码，不要求安装 GitHub CLI 或登录 GitHub：
 
 - Windows 更新根目录的 `领物做单器.pyw`。
 - macOS `.app` 下载并替换其内部运行源码，来源为 `macos/领物做单器.py`。
@@ -33,9 +33,19 @@ python3 macos/领物做单器.py
 
 macOS 的成分尺码编辑器支持选择 Excel 成分表，也支持选择本地成分数据库文件夹；不依赖 Windows 的 `D:` 路径。
 
+## 成分数据库
+
+Windows 和 macOS 都支持在“设置”中选择成分数据库文件夹，选择后会保存在本机。进入“修改成分尺码”后：
+
+1. 点击“选择数据库文件夹”可更换并保存目录。
+2. 点击“开始匹配”会读取已保存目录并匹配当前待付款订单。
+
+没有待付款订单时仍可进入该页面配置目录，但不能提交尺码修改。Windows 首次使用默认读取 `D:\匹配数据库文件夹`。
+
 ## 仓库规则
 
 - Windows 只修改根目录 `领物做单器.pyw`。
 - macOS 只修改 `macos/领物做单器.py`。
 - 不要提交 `auth-state-v1.json`、Cookie、token、本地订单数据或浏览器登录态。
 - 推送前执行 `git pull --rebase origin main`，发生冲突时先解决冲突，不要强制推送。
+- 面向用户的功能改动需同时检查 Windows 与 macOS 源码。
