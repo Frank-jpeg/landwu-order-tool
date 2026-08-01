@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import csv
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -25,7 +24,7 @@ from queue import Empty, Queue
 from typing import Any, Iterable
 from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 
 def detach_console_for_windowed_python() -> None:
@@ -160,7 +159,7 @@ WAYBILL_MONITORED_STATUSES = (3, 4, 5, 6)
 WAYBILL_FAILED_EXPRESS_STATUS = 3
 LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
-APP_VERSION = "2026.08.01.4"
+APP_VERSION = "2026.08.01.5"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "macos/领物做单器.py"
@@ -398,33 +397,18 @@ def get_source_version(text: str) -> str:
 
 
 def fetch_remote_update_source() -> dict[str, str]:
-    api_path = f"repos/{UPDATE_REPOSITORY}/contents/{UPDATE_SOURCE_PATH}?ref={UPDATE_BRANCH}"
+    source_url = (
+        f"https://raw.githubusercontent.com/{UPDATE_REPOSITORY}/{UPDATE_BRANCH}/"
+        f"{quote(UPDATE_SOURCE_PATH, safe='/')}"
+    )
     try:
-        result = subprocess.run(
-            ["gh", "api", api_path, "--method", "GET"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=NO_WINDOW_FLAGS,
-            check=False,
-            timeout=60,
-        )
-    except FileNotFoundError as exc:
-        raise RuntimeError("未找到 GitHub CLI（gh），无法读取私有仓库更新。") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("检查更新超时，请检查网络后重试。") from exc
-
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "未知错误").strip()
-        raise RuntimeError(f"无法读取 GitHub 更新：{detail[:300]}")
-
-    try:
-        payload = json.loads(result.stdout)
-        encoded = str(payload.get("content") or "").replace("\n", "")
-        source = base64.b64decode(encoded, validate=True).decode("utf-8")
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError("GitHub 返回的更新文件无效。") from exc
+        response = requests.get(source_url, timeout=60)
+        response.raise_for_status()
+        source = response.content.decode("utf-8")
+    except requests.RequestException as exc:
+        raise RuntimeError(f"无法下载公开更新文件：{exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise RuntimeError("GitHub 返回的更新文件编码无效。") from exc
 
     if not source.strip():
         raise RuntimeError("GitHub 更新文件为空，已取消更新。")
@@ -436,7 +420,7 @@ def fetch_remote_update_source() -> dict[str, str]:
     return {
         "source": source,
         "version": get_source_version(source),
-        "sha": str(payload.get("sha") or ""),
+        "sha": str(response.headers.get("ETag") or ""),
     }
 
 
