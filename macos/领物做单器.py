@@ -160,7 +160,7 @@ WAYBILL_MONITORED_STATUSES = (3, 4, 5, 6)
 WAYBILL_FAILED_EXPRESS_STATUS = 3
 LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
-APP_VERSION = "2026.08.01.3"
+APP_VERSION = "2026.08.01.4"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "macos/领物做单器.py"
@@ -4272,7 +4272,10 @@ class LandwuGuiApp:
         ttk.Button(toolbar, text="导入表格快速填写", command=lambda: self._apply_composition_to_size_views(file_var.get(), views, status_var)).pack(
             side="left", padx=(0, 6)
         )
-        ttk.Button(toolbar, text="选择数据库文件夹匹配", command=lambda: self._choose_and_apply_db_composition(views, status_var)).pack(
+        ttk.Button(toolbar, text="选择数据库文件夹", command=lambda: self._choose_composition_db_folder(status_var)).pack(
+            side="left", padx=(0, 6)
+        )
+        ttk.Button(toolbar, text="开始匹配", command=lambda: self._apply_saved_db_composition(views, status_var)).pack(
             side="left"
         )
 
@@ -4392,7 +4395,7 @@ class LandwuGuiApp:
         save_app_settings(settings)
         return selected_folder
 
-    def _choose_composition_db_folder(self) -> None:
+    def _choose_composition_db_folder(self, status_var: tk.StringVar | None = None) -> None:
         chosen = filedialog.askdirectory(title="选择成分数据库文件夹", initialdir=str(self._get_composition_db_folder()))
         if not chosen:
             return
@@ -4401,19 +4404,15 @@ class LandwuGuiApp:
         except OSError as exc:
             messagebox.showerror("成分数据库", f"保存目录设置失败：{exc}")
             return
-        self.status_var.set(f"成分数据库目录已保存：{selected_folder}")
+        message = f"成分数据库目录已保存：{selected_folder}"
+        self.status_var.set(message)
+        if status_var is not None:
+            status_var.set(message)
 
-    def _choose_and_apply_db_composition(self, views: list[dict[str, Any]], status_var: tk.StringVar) -> None:
-        chosen = filedialog.askdirectory(title="选择成分数据库文件夹", initialdir=str(self._get_composition_db_folder()))
-        if not chosen:
-            return
-        try:
-            db_folder = self._save_composition_db_folder(Path(chosen))
-        except OSError as exc:
-            messagebox.showerror("成分数据库匹配", f"保存目录设置失败：{exc}")
-            return
+    def _apply_saved_db_composition(self, views: list[dict[str, Any]], status_var: tk.StringVar) -> None:
+        db_folder = self._get_composition_db_folder()
         if not views:
-            status_var.set(f"成分数据库目录已保存：{db_folder}。当前无待付款订单，暂不能匹配或提交修改。")
+            status_var.set(f"当前无待付款订单。已保存的成分数据库目录：{db_folder}")
             return
         self._apply_db_composition_to_size_views(views, status_var, db_folder)
 
