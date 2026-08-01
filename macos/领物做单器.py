@@ -159,7 +159,7 @@ WAYBILL_MONITORED_STATUSES = (3, 4, 5, 6)
 WAYBILL_FAILED_EXPRESS_STATUS = 3
 LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
-APP_VERSION = "2026.08.01.7"
+APP_VERSION = "2026.08.01.8"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "macos/领物做单器.py"
@@ -4002,6 +4002,23 @@ class LandwuGuiApp:
         menu.tk_popup(event.x_root, event.y_root)
         return "break"
 
+    @staticmethod
+    def _format_payment_card_size_summary(row: dict[str, Any]) -> str:
+        values: list[str] = []
+        seen: set[str] = set()
+        for detail in row.get("detail") or []:
+            if not isinstance(detail, dict):
+                continue
+            size = str(detail.get("size") or detail.get("spec_size") or detail.get("goods_size") or "").strip()
+            if not size:
+                continue
+            sku = normalize_sku(detail.get("sku") or detail.get("productSku") or detail.get("product_sku") or detail.get("goods_sku"))
+            value = f"{sku}：{size}" if sku else size
+            if value not in seen:
+                values.append(value)
+                seen.add(value)
+        return "当前尺码：" + "；".join(values) if values else "当前尺码：未返回"
+
     def _populate_payment_cards(self, rows: list[dict[str, Any]]) -> None:
         self.payment_render_generation += 1
         self.payment_card_images.clear()
@@ -4061,6 +4078,16 @@ class LandwuGuiApp:
             title_label = ttk.Label(header, text=title, font=("Microsoft YaHei UI", 9, "bold"), background="#FFFFFF")
             title_label.pack(side="left")
             self._bind_payment_card_widget(title_label, iid)
+            size_summary = self._format_payment_card_size_summary(row)
+            size_label = ttk.Label(
+                header,
+                text=size_summary,
+                font=("Microsoft YaHei UI", 9, "bold"),
+                background="#FFFFFF",
+                foreground="#B45309" if size_summary.endswith("未返回") else "#047857",
+            )
+            size_label.pack(side="left", padx=(18, 0))
+            self._bind_payment_card_widget(size_label, iid)
 
             meta = f"状态：{row.get('status_text') or '-'}    件数：{row.get('buy_number_count') or 0}    SKU数：{row.get('buy_type_count') or 0}    平台时间：{row.get('plattime') or '-'}"
             meta_label = ttk.Label(card, text=meta, background="#FFFFFF", foreground="#52606D")
