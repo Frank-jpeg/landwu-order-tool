@@ -1,4 +1,17 @@
-__pycache__/
-*.error.log
-*.download
+# 登录态、密钥和本地数据
 auth-state-v1.json
+**/auth-state-v1.json
+*.token
+*.cookie
+cookies.json
+local-storage.json
+订单数据/
+本地订单数据/
+
+# 运行时和临时更新文件
+__pycache__/
+*.py[cod]
+*.download
+*.log
+*.bak-*
+.venv/
