@@ -90,8 +90,32 @@ def get_app_runtime_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
+def get_app_support_dir() -> Path:
+    return Path.home() / "Library" / "Application Support" / "领物做单器"
+
+
 def get_default_auth_state_file() -> Path:
-    return Path.home() / "Library" / "Application Support" / "领物做单器" / "auth-state-v1.json"
+    return get_app_support_dir() / "auth-state-v1.json"
+
+
+def get_app_settings_file() -> Path:
+    return get_app_support_dir() / "settings.json"
+
+
+def load_app_settings() -> dict[str, Any]:
+    try:
+        payload = json.loads(get_app_settings_file().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def save_app_settings(settings: dict[str, Any]) -> None:
+    settings_file = get_app_settings_file()
+    settings_file.parent.mkdir(parents=True, exist_ok=True)
+    temp_file = settings_file.with_suffix(".json.tmp")
+    temp_file.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp_file.replace(settings_file)
 
 
 def open_path(path_or_url: Any) -> None:
@@ -136,7 +160,7 @@ WAYBILL_MONITORED_STATUSES = (3, 4, 5, 6)
 WAYBILL_FAILED_EXPRESS_STATUS = 3
 LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
-APP_VERSION = "2026.08.01.2"
+APP_VERSION = "2026.08.01.3"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "macos/领物做单器.py"
@@ -2261,8 +2285,12 @@ class LandwuGuiApp:
         self.style = ttk.Style()
         self._setup_style()
 
+        app_settings = load_app_settings()
         self.auth_file_var = tk.StringVar(value=DEFAULT_AUTH_STATE_FILE)
         self.output_dir_var = tk.StringVar(value=str(get_default_output_dir()))
+        self.composition_db_folder_var = tk.StringVar(
+            value=str(app_settings.get("composition_db_folder") or COMPOSITION_DB_FOLDER)
+        )
         self.status_var = tk.StringVar(value="待命")
         self.account_var = tk.StringVar(value="-")
         self.factory_var = tk.StringVar(value="-")
@@ -3228,8 +3256,8 @@ class LandwuGuiApp:
         window = tk.Toplevel(self.root)
         self.settings_window = window
         window.title("设置")
-        window.geometry("820x390")
-        window.minsize(760, 350)
+        window.geometry("820x450")
+        window.minsize(760, 405)
         window.configure(background="#EEF2F6")
         window.transient(self.root)
 
@@ -3247,56 +3275,62 @@ class LandwuGuiApp:
         ttk.Entry(form, textvariable=self.output_dir_var).grid(row=0, column=1, columnspan=3, sticky="ew", padx=(8, 0), pady=4)
         ttk.Button(form, text="选择目录", command=self._choose_output_dir).grid(row=0, column=4, columnspan=2, sticky="w", padx=(12, 0), pady=4)
 
-        ttk.Label(form, text="登录态来源").grid(row=1, column=0, sticky="w", pady=4)
-        ttk.Label(form, text="本地同步文件", background="#FFFFFF", foreground="#495057").grid(row=1, column=1, sticky="w", padx=(8, 0), pady=4)
-        ttk.Button(form, text="登录态说明", command=self.show_auth_help).grid(row=1, column=2, sticky="w", padx=(8, 0), pady=4)
-        ttk.Button(form, text="查看登录态", command=self.fetch_auth).grid(row=1, column=3, sticky="w", padx=(8, 0), pady=4)
-        ttk.Label(form, text="下单余额").grid(row=1, column=4, sticky="e", padx=(12, 4), pady=4)
-        ttk.Label(form, textvariable=self.balance_var, style="SettingsBalance.TLabel").grid(row=1, column=5, sticky="w", pady=4)
-
-        ttk.Label(form, text="同步文件").grid(row=2, column=0, sticky="w", pady=4)
-        ttk.Entry(form, textvariable=self.auth_file_var).grid(row=2, column=1, columnspan=2, sticky="ew", padx=(8, 0), pady=4)
-        ttk.Button(form, text="选择文件", command=self._choose_auth_file).grid(row=2, column=3, sticky="w", padx=(8, 0), pady=4)
-        ttk.Button(form, text="接收登录态3分钟", command=self._start_auth_sync_receiver).grid(
-            row=2, column=4, columnspan=2, sticky="w", padx=(8, 0), pady=4
+        ttk.Label(form, text="成分数据库").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Entry(form, textvariable=self.composition_db_folder_var).grid(row=1, column=1, columnspan=3, sticky="ew", padx=(8, 0), pady=4)
+        ttk.Button(form, text="选择目录", command=self._choose_composition_db_folder).grid(
+            row=1, column=4, columnspan=2, sticky="w", padx=(12, 0), pady=4
         )
-        ttk.Label(form, text="同步脚本").grid(row=3, column=0, sticky="w", pady=4)
+
+        ttk.Label(form, text="登录态来源").grid(row=2, column=0, sticky="w", pady=4)
+        ttk.Label(form, text="本地同步文件", background="#FFFFFF", foreground="#495057").grid(row=2, column=1, sticky="w", padx=(8, 0), pady=4)
+        ttk.Button(form, text="登录态说明", command=self.show_auth_help).grid(row=2, column=2, sticky="w", padx=(8, 0), pady=4)
+        ttk.Button(form, text="查看登录态", command=self.fetch_auth).grid(row=2, column=3, sticky="w", padx=(8, 0), pady=4)
+        ttk.Label(form, text="下单余额").grid(row=2, column=4, sticky="e", padx=(12, 4), pady=4)
+        ttk.Label(form, textvariable=self.balance_var, style="SettingsBalance.TLabel").grid(row=2, column=5, sticky="w", pady=4)
+
+        ttk.Label(form, text="同步文件").grid(row=3, column=0, sticky="w", pady=4)
+        ttk.Entry(form, textvariable=self.auth_file_var).grid(row=3, column=1, columnspan=2, sticky="ew", padx=(8, 0), pady=4)
+        ttk.Button(form, text="选择文件", command=self._choose_auth_file).grid(row=3, column=3, sticky="w", padx=(8, 0), pady=4)
+        ttk.Button(form, text="接收登录态3分钟", command=self._start_auth_sync_receiver).grid(
+            row=3, column=4, columnspan=2, sticky="w", padx=(8, 0), pady=4
+        )
+        ttk.Label(form, text="同步脚本").grid(row=4, column=0, sticky="w", pady=4)
         ttk.Button(form, text="一键复制同步脚本", command=self.copy_auth_sync_userscript).grid(
-            row=3, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=4
+            row=4, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=4
         )
         ttk.Label(form, text="复制后粘贴到 Tampermonkey 并启用。", background="#FFFFFF", foreground="#6C757D").grid(
-            row=3, column=3, columnspan=3, sticky="w", padx=(8, 0), pady=4
+            row=4, column=3, columnspan=3, sticky="w", padx=(8, 0), pady=4
         )
         ttk.Label(form, textvariable=self.auth_sync_status_var, background="#FFFFFF", foreground="#6C757D").grid(
-            row=4, column=1, columnspan=5, sticky="w", padx=(8, 0), pady=(0, 4)
+            row=5, column=1, columnspan=5, sticky="w", padx=(8, 0), pady=(0, 4)
         )
 
-        ttk.Separator(form).grid(row=5, column=0, columnspan=6, sticky="ew", pady=12)
+        ttk.Separator(form).grid(row=6, column=0, columnspan=6, sticky="ew", pady=12)
         ttk.Checkbutton(
             form,
             text="开启自动刷新",
             variable=self.auto_refresh_enabled_var,
             command=self.apply_auto_refresh_settings,
-        ).grid(row=6, column=0, sticky="w", pady=4)
-        ttk.Label(form, text="模式").grid(row=6, column=1, sticky="e", pady=4)
+        ).grid(row=7, column=0, sticky="w", pady=4)
+        ttk.Label(form, text="模式").grid(row=7, column=1, sticky="e", pady=4)
         ttk.Combobox(
             form,
             textvariable=self.auto_refresh_mode_var,
             values=("每隔分钟", "每天时间"),
             width=10,
             state="readonly",
-        ).grid(row=6, column=2, sticky="w", padx=(8, 0), pady=4)
-        ttk.Label(form, text="间隔分钟").grid(row=6, column=3, sticky="e", padx=(10, 0), pady=4)
-        ttk.Entry(form, textvariable=self.auto_refresh_interval_var, width=8).grid(row=6, column=4, sticky="w", padx=(8, 0), pady=4)
-        ttk.Label(form, text="每天 HH:MM").grid(row=7, column=3, sticky="e", padx=(10, 0), pady=4)
-        ttk.Entry(form, textvariable=self.auto_refresh_time_var, width=8).grid(row=7, column=4, sticky="w", padx=(8, 0), pady=4)
-        ttk.Button(form, text="应用定时", command=self.apply_auto_refresh_settings).grid(row=7, column=5, sticky="e", pady=4)
+        ).grid(row=7, column=2, sticky="w", padx=(8, 0), pady=4)
+        ttk.Label(form, text="间隔分钟").grid(row=7, column=3, sticky="e", padx=(10, 0), pady=4)
+        ttk.Entry(form, textvariable=self.auto_refresh_interval_var, width=8).grid(row=7, column=4, sticky="w", padx=(8, 0), pady=4)
+        ttk.Label(form, text="每天 HH:MM").grid(row=8, column=3, sticky="e", padx=(10, 0), pady=4)
+        ttk.Entry(form, textvariable=self.auto_refresh_time_var, width=8).grid(row=8, column=4, sticky="w", padx=(8, 0), pady=4)
+        ttk.Button(form, text="应用定时", command=self.apply_auto_refresh_settings).grid(row=8, column=5, sticky="e", pady=4)
         ttk.Label(form, textvariable=self.auto_refresh_status_var, background="#FFFFFF", foreground="#6C757D").grid(
-            row=8, column=0, columnspan=6, sticky="w", pady=(10, 0)
+            row=9, column=0, columnspan=6, sticky="w", pady=(10, 0)
         )
 
         footer = ttk.Frame(form, style="Surface.TFrame")
-        footer.grid(row=9, column=0, columnspan=6, sticky="e", pady=(14, 0))
+        footer.grid(row=10, column=0, columnspan=6, sticky="e", pady=(14, 0))
         ttk.Label(footer, text=f"当前版本：{APP_VERSION}", background="#FFFFFF", foreground="#6C757D").pack(side="left", padx=(0, 10))
         ttk.Button(footer, text="检查更新", command=self.check_for_update, style="Ghost.TButton").pack(side="left", padx=(0, 8))
         ttk.Button(footer, text="关闭", command=close_window).pack(side="right")
@@ -4210,9 +4244,6 @@ class LandwuGuiApp:
             except Exception:
                 pass
         items = self._build_payment_size_items()
-        if not items:
-            messagebox.showinfo("修改成分尺码", "当前待付款列表为空，或订单明细缺少 SKU。请先刷新订单。")
-            return
 
         window = tk.Toplevel(self.root)
         self.size_editor_window = window
@@ -4224,7 +4255,13 @@ class LandwuGuiApp:
         window.protocol("WM_DELETE_WINDOW", self._close_size_editor_window)
 
         file_var = tk.StringVar(value=DEFAULT_COMPOSITION_XLSX)
-        status_var = tk.StringVar(value="可手填目标尺码，也可以导入订单成分匹配结果表自动填写。提交时使用“全部关联”。")
+        status_var = tk.StringVar(
+            value=(
+                "当前无待付款订单，可先选择并保存成分数据库目录。"
+                if not items
+                else "可手填目标尺码，也可以导入订单成分匹配结果表自动填写。提交时使用“全部关联”。"
+            )
+        )
         views: list[dict[str, Any]] = []
 
         toolbar = ttk.Frame(window)
@@ -4320,7 +4357,10 @@ class LandwuGuiApp:
         footer.pack(fill="x", padx=8, pady=(0, 8))
         ttk.Button(footer, text="全选有目标尺码", command=lambda: self._set_size_views_checked(views, True)).pack(side="left")
         ttk.Button(footer, text="全部取消", command=lambda: self._set_size_views_checked(views, False)).pack(side="left", padx=6)
-        ttk.Button(footer, text="提交勾选修改", command=lambda: self._submit_payment_size_changes(window, views)).pack(side="right")
+        submit_button = ttk.Button(footer, text="提交勾选修改", command=lambda: self._submit_payment_size_changes(window, views))
+        if not views:
+            submit_button.configure(state="disabled")
+        submit_button.pack(side="right")
 
     def _close_size_editor_window(self) -> None:
         window = self.size_editor_window
@@ -4340,10 +4380,42 @@ class LandwuGuiApp:
         if chosen:
             file_var.set(chosen)
 
+    def _get_composition_db_folder(self) -> Path:
+        configured = self.composition_db_folder_var.get().strip()
+        return Path(configured).expanduser() if configured else COMPOSITION_DB_FOLDER
+
+    def _save_composition_db_folder(self, folder: Path) -> Path:
+        selected_folder = folder.expanduser()
+        self.composition_db_folder_var.set(str(selected_folder))
+        settings = load_app_settings()
+        settings["composition_db_folder"] = str(selected_folder)
+        save_app_settings(settings)
+        return selected_folder
+
+    def _choose_composition_db_folder(self) -> None:
+        chosen = filedialog.askdirectory(title="选择成分数据库文件夹", initialdir=str(self._get_composition_db_folder()))
+        if not chosen:
+            return
+        try:
+            selected_folder = self._save_composition_db_folder(Path(chosen))
+        except OSError as exc:
+            messagebox.showerror("成分数据库", f"保存目录设置失败：{exc}")
+            return
+        self.status_var.set(f"成分数据库目录已保存：{selected_folder}")
+
     def _choose_and_apply_db_composition(self, views: list[dict[str, Any]], status_var: tk.StringVar) -> None:
-        chosen = filedialog.askdirectory(title="选择成分数据库文件夹", initialdir=str(COMPOSITION_DB_FOLDER))
-        if chosen:
-            self._apply_db_composition_to_size_views(views, status_var, Path(chosen))
+        chosen = filedialog.askdirectory(title="选择成分数据库文件夹", initialdir=str(self._get_composition_db_folder()))
+        if not chosen:
+            return
+        try:
+            db_folder = self._save_composition_db_folder(Path(chosen))
+        except OSError as exc:
+            messagebox.showerror("成分数据库匹配", f"保存目录设置失败：{exc}")
+            return
+        if not views:
+            status_var.set(f"成分数据库目录已保存：{db_folder}。当前无待付款订单，暂不能匹配或提交修改。")
+            return
+        self._apply_db_composition_to_size_views(views, status_var, db_folder)
 
     def _mark_size_view_after_manual_edit(self, view: dict[str, Any]) -> None:
         target = str(view["target"].get() or "").strip()
