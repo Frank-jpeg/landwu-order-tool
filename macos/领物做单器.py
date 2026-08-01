@@ -159,7 +159,9 @@ WAYBILL_MONITORED_STATUSES = (3, 4, 5, 6)
 WAYBILL_FAILED_EXPRESS_STATUS = 3
 LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
-APP_VERSION = "2026.08.01.9"
+# 一格滚轮对应的滚动像素；Text/Canvas 用像素滚动，避免整张卡片一次跳过去
+SCROLL_PIXELS_PER_UNIT = 60
+APP_VERSION = "2026.08.01.10"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "macos/领物做单器.py"
@@ -2314,6 +2316,8 @@ class LandwuGuiApp:
         self._mousewheel_targets: dict[str, tk.Widget] = {}
         self._mousewheel_hover_target: tk.Widget | None = None
         self._mousewheel_dispatcher_installed = False
+        self._touchpad_scroll_supported: bool | None = None
+        self._scroll_pixel_remainder: dict[str, int] = {}
         self.tab_statuses = list(GUI_STATUS_TABS)
         self.order_rows_by_status_iid: dict[int, dict[str, dict[str, Any]]] = {status: {} for status in GUI_STATUS_TABS}
         self.unchecked_edit_order_ids: set[str] = set()
@@ -2593,6 +2597,7 @@ class LandwuGuiApp:
         tree.bind("<MouseWheel>", _tree_mousewheel)
         tree.bind("<Button-4>", _tree_mousewheel)
         tree.bind("<Button-5>", _tree_mousewheel)
+        self._bind_touchpad_scroll(tree, lambda event, _tree=tree: self._scroll_touchpad_target(_tree, event))
         self.trees[status] = tree
 
     def _create_payment_cards_view(self, parent: ttk.Frame) -> None:
@@ -2831,15 +2836,55 @@ class LandwuGuiApp:
             return 1
         return 0
 
+    def _scroll_target_pixels(self, target: tk.Widget, pixels: int) -> str | None:
+        """按像素滚动；部件不支持 pixels 时按累计量回退到 units。"""
+        if not pixels:
+            return None
+        try:
+            target.yview_scroll(pixels, "pixels")
+            return "break"
+        except tk.TclError:
+            pass
+        key = str(target)
+        pending = self._scroll_pixel_remainder.get(key, 0) + pixels
+        units = int(pending / SCROLL_PIXELS_PER_UNIT)
+        self._scroll_pixel_remainder[key] = pending - units * SCROLL_PIXELS_PER_UNIT
+        if not units:
+            return "break"
+        try:
+            target.yview_scroll(units, "units")
+        except tk.TclError:
+            return None
+        return "break"
+
     def _scroll_mousewheel_target(self, target: tk.Widget, event) -> str | None:
         units = self._mousewheel_units(event)
-        if units:
-            try:
-                target.yview_scroll(units, "units")
-            except tk.TclError:
-                return None
-            return "break"
-        return None
+        if not units:
+            return None
+        # Text 的一个 unit 是「显示行」，而每张订单卡片就是一整行；卡片比可视区高时整行滚不动。
+        # Canvas 同理会按 yscrollincrement 跳格，所以这两类统一改成像素滚动。
+        if isinstance(target, (tk.Text, tk.Canvas)):
+            return self._scroll_target_pixels(target, units * SCROLL_PIXELS_PER_UNIT)
+        try:
+            target.yview_scroll(units, "units")
+        except tk.TclError:
+            return None
+        return "break"
+
+    @staticmethod
+    def _touchpad_scroll_deltas(event) -> tuple[int, int]:
+        """拆开 <TouchpadScroll> 的 %D，与 Tk 的 tk::PreciseScrollDeltas 一致。"""
+        packed = int(getattr(event, "delta", 0) or 0)
+        delta_x = packed >> 16
+        low = packed & 0xFFFF
+        delta_y = low if low < 0x8000 else low - 0x10000
+        return delta_x, delta_y
+
+    def _scroll_touchpad_target(self, target: tk.Widget, event) -> str | None:
+        _delta_x, delta_y = self._touchpad_scroll_deltas(event)
+        if not delta_y:
+            return None
+        return self._scroll_target_pixels(target, -delta_y)
 
     def _find_mousewheel_target(self, widget: tk.Widget | None) -> tk.Widget | None:
         current = widget
@@ -2879,7 +2924,7 @@ class LandwuGuiApp:
                 return candidate
         return None
 
-    def _dispatch_mousewheel(self, event) -> str | None:
+    def _resolve_scroll_target(self, event) -> tk.Widget | None:
         target = None
         hover_target = getattr(self, "_mousewheel_hover_target", None)
         if hover_target is not None:
@@ -2892,12 +2937,31 @@ class LandwuGuiApp:
             target = self._find_mousewheel_target(getattr(event, "widget", None))
         if target is None:
             target = self._active_canvas_under_event(event)
+        return target
+
+    def _dispatch_mousewheel(self, event) -> str | None:
+        target = self._resolve_scroll_target(event)
         if target is None:
             return None
-        units = self._mousewheel_units(event)
-        if units:
-            self.status_var.set(f"滚轮滚动：{units}")
         return self._scroll_mousewheel_target(target, event)
+
+    def _dispatch_touchpad_scroll(self, event) -> str | None:
+        target = self._resolve_scroll_target(event)
+        if target is None:
+            return None
+        return self._scroll_touchpad_target(target, event)
+
+    def _bind_touchpad_scroll(self, widget: tk.Widget, handler) -> bool:
+        """绑定 <TouchpadScroll>。Tk 8.6 没有这个事件，绑定失败就静默跳过。"""
+        if self._touchpad_scroll_supported is False:
+            return False
+        try:
+            widget.bind("<TouchpadScroll>", handler)
+        except tk.TclError:
+            self._touchpad_scroll_supported = False
+            return False
+        self._touchpad_scroll_supported = True
+        return True
 
     def _ensure_mousewheel_dispatcher(self) -> None:
         if self._mousewheel_dispatcher_installed:
@@ -2905,10 +2969,17 @@ class LandwuGuiApp:
         self.root.bind_all("<MouseWheel>", self._dispatch_mousewheel, add="+")
         self.root.bind_all("<Button-4>", self._dispatch_mousewheel, add="+")
         self.root.bind_all("<Button-5>", self._dispatch_mousewheel, add="+")
+        if self._touchpad_scroll_supported is not False:
+            try:
+                self.root.bind_all("<TouchpadScroll>", self._dispatch_touchpad_scroll, add="+")
+                self._touchpad_scroll_supported = True
+            except tk.TclError:
+                self._touchpad_scroll_supported = False
         self._mousewheel_dispatcher_installed = True
 
     def _forget_mousewheel_widget(self, widget_key: str) -> None:
         self._mousewheel_targets.pop(widget_key, None)
+        self._scroll_pixel_remainder.pop(widget_key, None)
 
     def _bind_widget_mousewheel(self, widget: tk.Widget, canvas: tk.Canvas) -> None:
         widget_key = str(widget)
@@ -2921,17 +2992,29 @@ class LandwuGuiApp:
                 return "break"
             return result
 
+        def _touchpad_handler(event, target=canvas):
+            # Tk 9 起，macOS 的触控板/妙控鼠标发的是 <TouchpadScroll> 而不是 <MouseWheel>。
+            # Text、Treeview 等自带类绑定还能滚，但卡片里的 Frame/Label（尤其是图片 Label）
+            # 没有任何类绑定，不显式绑定就完全滚不动。
+            return self._scroll_touchpad_target(target, event)
+
         def _focus_scroll_target(_event=None, target=canvas) -> None:
             try:
                 self._mousewheel_hover_target = target
             except tk.TclError:
                 pass
 
+        def _blur_scroll_target(_event=None, target=canvas) -> None:
+            if self._mousewheel_hover_target is target:
+                self._mousewheel_hover_target = None
+
         # macOS 需要直接绑定到 widget，优先级更高
         widget.bind("<Enter>", _focus_scroll_target, add="+")
+        widget.bind("<Leave>", _blur_scroll_target, add="+")
         widget.bind("<MouseWheel>", _handler)  # 移除 add="+" 让绑定优先级更高
         widget.bind("<Button-4>", _handler)
         widget.bind("<Button-5>", _handler)
+        self._bind_touchpad_scroll(widget, _touchpad_handler)
         widget.bind("<Destroy>", lambda _event, key=widget_key: self._forget_mousewheel_widget(key), add="+")
 
     def _prepare_image_for_label(

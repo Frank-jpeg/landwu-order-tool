@@ -149,7 +149,9 @@ WAYBILL_MONITORED_STATUSES = (3, 4, 5, 6)
 WAYBILL_FAILED_EXPRESS_STATUS = 3
 LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
-APP_VERSION = "2026.08.01.9"
+# 触控板精密滚动累计多少像素算一格滚轮
+SCROLL_PIXELS_PER_UNIT = 60
+APP_VERSION = "2026.08.01.10"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "领物做单器.pyw"
@@ -2332,6 +2334,8 @@ class LandwuGuiApp:
         self.current_show_error_popup = True
         self.buttons: list[ttk.Button] = []
         self.trees: dict[int, ttk.Treeview] = {}
+        self._touchpad_scroll_supported: bool | None = None
+        self._scroll_pixel_remainder: dict[str, int] = {}
         self.tab_statuses = list(GUI_STATUS_TABS)
         self.order_rows_by_status_iid: dict[int, dict[str, dict[str, Any]]] = {status: {} for status in GUI_STATUS_TABS}
         self.unchecked_edit_order_ids: set[str] = set()
@@ -2820,10 +2824,43 @@ class LandwuGuiApp:
             return "break"
         return None
 
+    @staticmethod
+    def _touchpad_scroll_deltas(event) -> tuple[int, int]:
+        """拆开 <TouchpadScroll> 的 %D，与 Tk 的 tk::PreciseScrollDeltas 一致。"""
+        packed = int(getattr(event, "delta", 0) or 0)
+        delta_x = packed >> 16
+        low = packed & 0xFFFF
+        delta_y = low if low < 0x8000 else low - 0x10000
+        return delta_x, delta_y
+
+    def _scroll_canvas_touchpad(self, canvas: tk.Canvas, event) -> str | None:
+        _delta_x, delta_y = self._touchpad_scroll_deltas(event)
+        if not delta_y:
+            return None
+        key = str(canvas)
+        pending = self._scroll_pixel_remainder.get(key, 0) - delta_y
+        units = int(pending / SCROLL_PIXELS_PER_UNIT)
+        self._scroll_pixel_remainder[key] = pending - units * SCROLL_PIXELS_PER_UNIT
+        if units:
+            canvas.yview_scroll(units, "units")
+        return "break"
+
+    def _bind_touchpad_scroll(self, widget: tk.Widget, canvas: tk.Canvas) -> None:
+        """Tk 9 起，精密触控板发的是 <TouchpadScroll> 而不是 <MouseWheel>；Tk 8.6 没有这个事件。"""
+        if self._touchpad_scroll_supported is False:
+            return
+        try:
+            widget.bind("<TouchpadScroll>", lambda event, target=canvas: self._scroll_canvas_touchpad(target, event))
+        except tk.TclError:
+            self._touchpad_scroll_supported = False
+            return
+        self._touchpad_scroll_supported = True
+
     def _bind_widget_mousewheel(self, widget: tk.Widget, canvas: tk.Canvas) -> None:
         widget.bind("<MouseWheel>", lambda event, target=canvas: self._scroll_canvas(target, event))
         widget.bind("<Button-4>", lambda event, target=canvas: self._scroll_canvas(target, event))
         widget.bind("<Button-5>", lambda event, target=canvas: self._scroll_canvas(target, event))
+        self._bind_touchpad_scroll(widget, canvas)
 
     def _prepare_image_for_label(
         self,
