@@ -159,7 +159,7 @@ WAYBILL_MONITORED_STATUSES = (3, 4, 5, 6)
 WAYBILL_FAILED_EXPRESS_STATUS = 3
 LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
-APP_VERSION = "2026.08.01.5"
+APP_VERSION = "2026.08.01.6"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "macos/领物做单器.py"
@@ -766,13 +766,15 @@ def load_composition_db_mapping(query_values: Iterable[Any], db_folder: Path = C
         if not join_cols:
             skipped_files.append(db_path.name)
             continue
-        ingredient_col = 7 if len(headers) >= 8 else -1
-        if ingredient_col < 0:
-            skipped_files.append(db_path.name)
-            continue
+        ingredient_col = find_table_column(headers, ["成分", "成份"])
+        if ingredient_col < 0 and len(headers) >= 8:
+            ingredient_col = 7
         material_col = find_table_column(headers, ["材质"])
         if material_col < 0 and len(headers) >= 7:
             material_col = 6
+        if ingredient_col < 0 and material_col < 0:
+            skipped_files.append(db_path.name)
+            continue
         used_files += 1
         for row in rows:
             scanned_rows += 1
