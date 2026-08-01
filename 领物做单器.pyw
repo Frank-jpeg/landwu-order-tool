@@ -149,7 +149,7 @@ WAYBILL_MONITORED_STATUSES = (3, 4, 5, 6)
 WAYBILL_FAILED_EXPRESS_STATUS = 3
 LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
-APP_VERSION = "2026.08.01.8"
+APP_VERSION = "2026.08.01.9"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "领物做单器.pyw"
@@ -3826,6 +3826,23 @@ class LandwuGuiApp:
                 seen.add(value)
         return "当前尺码：" + "；".join(values) if values else "当前尺码：未返回"
 
+    @staticmethod
+    def _generic_size_skus_from_payment_row(row: dict[str, Any]) -> list[str]:
+        skus: list[str] = []
+        seen: set[str] = set()
+        for detail in row.get("detail") or []:
+            if not isinstance(detail, dict):
+                continue
+            size = str(detail.get("size") or detail.get("spec_size") or detail.get("goods_size") or "").strip()
+            if size != "通用尺码":
+                continue
+            sku = normalize_sku(detail.get("sku") or detail.get("productSku") or detail.get("product_sku") or detail.get("goods_sku"))
+            value = sku or "未识别 SKU"
+            if value not in seen:
+                skus.append(value)
+                seen.add(value)
+        return skus
+
     def _populate_payment_cards(self, rows: list[dict[str, Any]]) -> None:
         self.payment_card_images.clear()
         self.payment_card_frames.clear()
@@ -4527,6 +4544,17 @@ class LandwuGuiApp:
                 order_nos.append(str(row.get("order_no") or ""))
         return order_nos
 
+    def get_checked_payment_generic_size_orders(self) -> list[dict[str, Any]]:
+        orders: list[dict[str, Any]] = []
+        for row in self.order_rows_by_status_iid.get(2, {}).values():
+            order_id = str(row.get("order_id") or "")
+            if not order_id or not self._is_jit_row(row) or order_id in self.unchecked_payment_order_ids:
+                continue
+            skus = self._generic_size_skus_from_payment_row(row)
+            if skus:
+                orders.append({"order_no": str(row.get("order_no") or ""), "skus": skus})
+        return orders
+
     def get_payment_counts(self) -> dict[str, int]:
         jit_total = 0
         checked = 0
@@ -4541,6 +4569,97 @@ class LandwuGuiApp:
             else:
                 unchecked += 1
         return {"jitTotal": jit_total, "checked": checked, "unchecked": unchecked}
+
+    def _confirm_payment_with_size_warning(
+        self,
+        counts: dict[str, int],
+        selected_order_nos: list[str],
+        generic_size_orders: list[dict[str, Any]],
+    ) -> bool:
+        message_lines = [
+            f"待付款 JIT 共 {counts['jitTotal']} 单。",
+            f"当前勾选 {counts['checked']} 单，取消勾选 {counts['unchecked']} 单。",
+            f"将先预检，预检通过后真实支付：{self._format_order_no_preview(selected_order_nos)}",
+        ]
+        if not generic_size_orders:
+            return messagebox.askyesno("确认支付", "\n".join([*message_lines, "", "确认图片无误，并继续吗？"]))
+
+        warning_orders: list[str] = []
+        for item in generic_size_orders:
+            order_no = str(item.get("order_no") or "-")
+            skus = [str(sku) for sku in item.get("skus") or [] if str(sku)]
+            sku_text = "、".join(skus[:3])
+            if len(skus) > 3:
+                sku_text += "…"
+            warning_orders.append(f"{order_no}（{sku_text}）" if sku_text else order_no)
+
+        result = {"confirmed": False}
+        dialog = tk.Toplevel(self.root)
+        dialog.title("确认支付")
+        dialog.configure(background="#FFFFFF")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+
+        def close(confirmed: bool = False) -> None:
+            result["confirmed"] = confirmed
+            try:
+                dialog.grab_release()
+            except Exception:
+                pass
+            dialog.destroy()
+
+        dialog.protocol("WM_DELETE_WINDOW", close)
+        dialog.bind("<Escape>", lambda _event: close())
+
+        body = tk.Frame(dialog, bg="#FFFFFF", padx=24, pady=20)
+        body.pack(fill="both", expand=True)
+        tk.Label(
+            body,
+            text="\n".join(message_lines),
+            justify="left",
+            anchor="w",
+            bg="#FFFFFF",
+            fg="#1F2933",
+            font=("Microsoft YaHei UI", 9),
+        ).pack(fill="x", anchor="w")
+
+        warning_frame = tk.Frame(body, bg="#FEF2F2", highlightbackground="#FCA5A5", highlightthickness=1, padx=12, pady=10)
+        warning_frame.pack(fill="x", pady=(14, 0))
+        tk.Label(
+            warning_frame,
+            text="有未改成分尺码的订单，确认付款吗？",
+            justify="left",
+            anchor="w",
+            bg="#FEF2F2",
+            fg="#B91C1C",
+            font=("Microsoft YaHei UI", 10, "bold"),
+        ).pack(fill="x", anchor="w")
+        tk.Label(
+            warning_frame,
+            text="通用尺码订单：" + "；".join(warning_orders),
+            justify="left",
+            anchor="w",
+            wraplength=500,
+            bg="#FEF2F2",
+            fg="#B91C1C",
+            font=("Microsoft YaHei UI", 9),
+        ).pack(fill="x", anchor="w", pady=(6, 0))
+
+        tk.Label(body, text="请确认图片和尺码无误后再继续。", bg="#FFFFFF", fg="#52606D").pack(anchor="w", pady=(14, 0))
+        buttons = ttk.Frame(body)
+        buttons.pack(fill="x", pady=(18, 0))
+        cancel_button = ttk.Button(buttons, text="取消", command=close)
+        cancel_button.pack(side="right")
+        ttk.Button(buttons, text="仍要付款", command=lambda: close(True), style="Danger.TButton").pack(side="right", padx=(0, 8))
+
+        dialog.update_idletasks()
+        x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - dialog.winfo_width()) // 2)
+        y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - dialog.winfo_height()) // 2)
+        dialog.geometry(f"+{x}+{y}")
+        dialog.grab_set()
+        cancel_button.focus_set()
+        self.root.wait_window(dialog)
+        return bool(result["confirmed"])
 
     def _format_order_no_preview(self, order_nos: Iterable[str], limit: int = 8) -> str:
         values = [str(item) for item in order_nos if str(item)]
@@ -4743,18 +4862,8 @@ class LandwuGuiApp:
             messagebox.showinfo("确认支付", "当前没有勾选待付款 JIT。")
             return
         counts = self.get_payment_counts()
-        if not messagebox.askyesno(
-            "确认支付",
-            "\n".join(
-                [
-                    f"待付款 JIT 共 {counts['jitTotal']} 单。",
-                    f"当前勾选 {counts['checked']} 单，取消勾选 {counts['unchecked']} 单。",
-                    f"将先预检，预检通过后真实支付：{self._format_order_no_preview(selected_order_nos)}",
-                    "",
-                    "确认图片无误，并继续吗？",
-                ]
-            ),
-        ):
+        generic_size_orders = self.get_checked_payment_generic_size_orders()
+        if not self._confirm_payment_with_size_warning(counts, selected_order_nos, generic_size_orders):
             return
 
         def task():
