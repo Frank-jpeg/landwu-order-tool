@@ -1583,8 +1583,8 @@ class LandwuClient:
         }
 
     def filter_live_payment_size_targets(self, items: list[dict[str, Any]]) -> dict[str, Any]:
-        jit_tag = self.get_jit_tag()
-        rows = self.iter_orders(status=2, plat_order_type=jit_tag["id"], limit=100)
+        # 尺码编辑器同时展示 JIT 和 VMI；校验也必须覆盖全部待付款订单。
+        rows = self.iter_orders(status=2, limit=100)
         live_detail_ids: set[str] = set()
         for row in rows:
             for detail in row.get("detail") or []:
