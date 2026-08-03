@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Landwu 待付款快速改尺码
 // @namespace    https://user.landwu.com/
-// @version      2026.08.03.3
+// @version      2026.08.03.4
 // @description  在 Landwu 待付款页面快速把订单明细尺码改为棉、涤纶、人棉或通用尺码。
 // @match        https://user.landwu.com/*
 // @grant        none
@@ -13,7 +13,7 @@
 (function () {
   'use strict';
 
-  const SCRIPT_VERSION = '2026.08.03.3';
+  const SCRIPT_VERSION = '2026.08.03.4';
   const PANEL_ID = 'landwu-payment-size-helper';
   const STYLE_ID = `${PANEL_ID}-style`;
   const COLLAPSED_STORAGE_KEY = `${PANEL_ID}-collapsed`;
@@ -343,8 +343,8 @@
       #${PANEL_ID}[data-collapsed="1"] {
         right: 0;
         bottom: 110px;
-        width: 42px;
-        max-width: 42px;
+        width: 34px;
+        max-width: 34px;
         border-right: 0;
         border-radius: 10px 0 0 10px;
       }
@@ -359,16 +359,16 @@
         user-select: none;
       }
       #${PANEL_ID}[data-collapsed="1"] .lw-head {
-        min-height: 112px;
-        padding: 10px 6px;
+        min-height: 38px;
+        padding: 0;
         justify-content: center;
         cursor: pointer;
       }
       #${PANEL_ID} .lw-title { font-weight: 700; flex: 1; }
       #${PANEL_ID}[data-collapsed="1"] .lw-title {
-        writing-mode: vertical-rl;
-        letter-spacing: 1px;
-        line-height: 1.1;
+        flex: 0 0 auto;
+        font-size: 16px;
+        line-height: 38px;
         text-align: center;
       }
       #${PANEL_ID} .lw-version { opacity: .65; font-size: 11px; }
@@ -501,8 +501,8 @@
           left: auto;
           right: 0;
           bottom: 96px;
-          width: 40px;
-          max-width: 40px;
+          width: 34px;
+          max-width: 34px;
         }
         #${PANEL_ID} .lw-list {
           max-height: min(62vh, 520px);
@@ -548,7 +548,7 @@
     panel.dataset.collapsed = state.collapsed ? '1' : '0';
     panel.innerHTML = `
       <div class="lw-head" data-action="toggle" title="${state.collapsed ? '展开快速改尺码' : '收起到屏幕边缘'}">
-        <div class="lw-title">待付款快速改尺码</div>
+        <div class="lw-title">${state.collapsed ? '改' : '待付款快速改尺码'}</div>
         <div class="lw-version">v${escapeHtml(SCRIPT_VERSION)}</div>
         <button type="button" data-action="toggle">${state.collapsed ? '展开' : '收起'}</button>
       </div>
