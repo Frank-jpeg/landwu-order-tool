@@ -52,3 +52,19 @@ https://raw.githubusercontent.com/Frank-jpeg/landwu-order-tool/codex/landwu-mobi
 匹配优先级为 `SKC_ID -> SPU_ID -> SKU`。如果 `target_size` 为空，脚本会根据 `composition` 推断：优先 `人棉`，再 `涤纶/聚酯/polyester`，再 `棉`。
 
 注意：这个仓库是公开仓库，放到 `composition-db.json` 的内容任何人拿到链接都能下载。不要放登录态、Cookie、token、私有订单数据或不想公开的数据库。
+
+## 从本机数据库导出
+
+固定位置已经定好：
+
+- 本机来源目录：`D:\匹配成分数据库`
+- 手机端公开文件：`mobile/composition-db.json`
+- 手机端读取地址：`https://raw.githubusercontent.com/Frank-jpeg/landwu-order-tool/codex/landwu-mobile/mobile/composition-db.json`
+
+更新数据库时运行：
+
+```bash
+python mobile/export_composition_db.py
+```
+
+导出脚本只写入 `SKC_ID / SPU_ID / SKU / composition / target_size`，不会提交原始 Excel/CSV 文件。
