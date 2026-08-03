@@ -13,6 +13,9 @@
 (function () {
   'use strict';
 
+  if (window.__LANDWU_MOBILE_ORDER_TOOL_LOADED__) return;
+  window.__LANDWU_MOBILE_ORDER_TOOL_LOADED__ = true;
+
   const SCRIPT_VERSION = '2026.08.03.1';
   const PANEL_ID = 'landwu-mobile-order-tool';
   const STYLE_ID = `${PANEL_ID}-style`;

@@ -12,6 +12,24 @@ https://raw.githubusercontent.com/Frank-jpeg/landwu-order-tool/codex/landwu-mobi
 
 安卓建议用支持 userscript 的浏览器安装脚本猫或 Tampermonkey。iPhone 可用支持 userscript 的 Safari 扩展。安装后，用同一个手机浏览器打开并登录 `https://user.landwu.com/`。
 
+## 安卓 APK 套壳
+
+如果手机浏览器不支持扩展，可以构建一个简单 APK 套壳。它内置 Android WebView，启动后打开 `https://user.landwu.com/`；登录领物后自动注入 `landwu-mobile.user.js` 做单面板。
+
+本机已有 Android SDK 时运行：
+
+```powershell
+.\mobile\android\build_apk.ps1
+```
+
+生成文件：
+
+```text
+mobile/android/build/outputs/landwu-mobile-debug.apk
+```
+
+这是 debug 签名 APK，适合自用测试。首次安装可能需要在安卓手机上允许“安装未知来源应用”。
+
 ## 登录态
 
 手机版不导入 `auth-state-v1.json`，也不上传 token。脚本只读取当前 Landwu 页面里的 `access_token` 和 `user_info`，并直接调用 Landwu 自己的接口。

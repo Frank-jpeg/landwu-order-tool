@@ -15,3 +15,7 @@ __pycache__/
 *.log
 *.bak-*
 .venv/
+
+# Android build outputs
+mobile/android/build/
+mobile/android/*.keystore
