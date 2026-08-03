@@ -161,7 +161,7 @@ LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
 # 一格滚轮对应的滚动像素；Text/Canvas 用像素滚动，避免整张卡片一次跳过去
 SCROLL_PIXELS_PER_UNIT = 60
-APP_VERSION = "2026.08.01.10"
+APP_VERSION = "2026.08.01.11"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "macos/领物做单器.py"
@@ -2309,6 +2309,7 @@ class LandwuGuiApp:
         self.image_executor = ThreadPoolExecutor(max_workers=6, thread_name_prefix="landwu-image")
         self.busy = False
         self.current_success_handler = None
+        self.current_error_handler = None
         self.current_show_error_popup = True
         self.pending_update_source = ""
         self.buttons: list[ttk.Button] = []
@@ -3607,7 +3608,16 @@ class LandwuGuiApp:
 
         self._schedule_auto_refresh_tick()
 
-    def _run_task(self, title: str, task, on_success=None, *, quiet_if_busy: bool = False, show_error: bool = True) -> None:
+    def _run_task(
+        self,
+        title: str,
+        task,
+        on_success=None,
+        *,
+        quiet_if_busy: bool = False,
+        show_error: bool = True,
+        on_error=None,
+    ) -> None:
         if self.busy:
             if quiet_if_busy:
                 self._log(f"跳过：{title}，当前已有任务执行中")
@@ -3616,6 +3626,7 @@ class LandwuGuiApp:
             return
 
         self.current_success_handler = on_success
+        self.current_error_handler = on_error
         self.current_show_error_popup = show_error
         self._set_busy(True, f"{title}中...")
         self._log(f"开始：{title}")
@@ -3638,6 +3649,7 @@ class LandwuGuiApp:
                     self._log(f"完成：{title}", payload)
                     handler = self.current_success_handler
                     self.current_success_handler = None
+                    self.current_error_handler = None
                     self.current_show_error_popup = True
                     if handler:
                         handler(payload)
@@ -3647,9 +3659,13 @@ class LandwuGuiApp:
                         brief = brief[:77] + "..."
                     self._set_busy(False, f"{title}失败：{brief}" if brief else f"{title}失败")
                     show_error = self.current_show_error_popup
+                    handler = self.current_error_handler
                     self.current_success_handler = None
+                    self.current_error_handler = None
                     self.current_show_error_popup = True
                     self._log(f"失败：{title}", payload)
+                    if handler:
+                        handler(payload)
                     if show_error:
                         messagebox.showerror(title, str(payload))
         except Empty:
@@ -4496,7 +4512,8 @@ class LandwuGuiApp:
         footer.pack(fill="x", padx=8, pady=(0, 8))
         ttk.Button(footer, text="全选有目标尺码", command=lambda: self._set_size_views_checked(views, True)).pack(side="left")
         ttk.Button(footer, text="全部取消", command=lambda: self._set_size_views_checked(views, False)).pack(side="left", padx=6)
-        submit_button = ttk.Button(footer, text="提交勾选修改", command=lambda: self._submit_payment_size_changes(window, views))
+        submit_button = ttk.Button(footer, text="提交勾选修改")
+        submit_button.configure(command=lambda: self._submit_payment_size_changes(window, views, status_var, submit_button))
         if not views:
             submit_button.configure(state="disabled")
         submit_button.pack(side="right")
@@ -4695,7 +4712,13 @@ class LandwuGuiApp:
             current = str((view.get("item") or {}).get("current_size") or "").strip()
             view["checked"].set(bool(checked and target and target != current))
 
-    def _submit_payment_size_changes(self, window: tk.Toplevel, views: list[dict[str, Any]]) -> None:
+    def _submit_payment_size_changes(
+        self,
+        window: tk.Toplevel,
+        views: list[dict[str, Any]],
+        status_var: tk.StringVar | None = None,
+        submit_button: ttk.Button | None = None,
+    ) -> None:
         targets: list[dict[str, Any]] = []
         skipped_blank = 0
         skipped_same = 0
@@ -4738,6 +4761,20 @@ class LandwuGuiApp:
             ),
         ):
             return
+        if self.busy:
+            messagebox.showinfo("请稍候", "当前已有任务执行中。")
+            return
+
+        pending_message = f"正在提交 {len(targets)} 个 SKU，请稍候..."
+        self.status_var.set(pending_message)
+        if status_var is not None:
+            status_var.set(pending_message)
+        if submit_button is not None:
+            submit_button.configure(text="正在提交...", state="disabled")
+        try:
+            window.update_idletasks()
+        except Exception:
+            pass
 
         def task():
             return with_landwu_session(
@@ -4748,6 +4785,16 @@ class LandwuGuiApp:
         def on_success(payload: dict[str, Any]) -> None:
             failed = payload.get("failed") or []
             message = payload.get("message") or "尺码修改完成"
+            done_message = (
+                f"尺码修改完成：失败 {len(failed)} / 共 {len(targets)} 个，请查看弹窗。"
+                if failed
+                else f"尺码修改完成：成功 {len(targets)} 个，正在刷新订单..."
+            )
+            self.status_var.set(done_message)
+            if status_var is not None:
+                status_var.set(done_message)
+            if failed and submit_button is not None:
+                submit_button.configure(text="提交勾选修改", state="normal")
             if failed:
                 message += "\n失败示例：" + "；".join(
                     f"{item.get('orderNo')} {item.get('sku')}：{item.get('error')}" for item in failed[:3]
@@ -4757,7 +4804,18 @@ class LandwuGuiApp:
                 self._close_size_editor_window()
             self.refresh_summary()
 
-        self._run_task("修改待付款订单成分尺码", task, on_success=on_success)
+        def on_error(error: str) -> None:
+            brief = str(error).replace("\r", " ").replace("\n", " ").strip()
+            if len(brief) > 80:
+                brief = brief[:77] + "..."
+            error_message = f"尺码修改失败：{brief}" if brief else "尺码修改失败"
+            self.status_var.set(error_message)
+            if status_var is not None:
+                status_var.set(error_message)
+            if submit_button is not None:
+                submit_button.configure(text="提交勾选修改", state="normal")
+
+        self._run_task("修改待付款订单成分尺码", task, on_success=on_success, on_error=on_error)
 
     def _active_status(self) -> int:
         try:
