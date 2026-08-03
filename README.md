@@ -26,7 +26,7 @@ macOS 将登录态和本地设置保存在 `~/Library/Application Support/领物
 
 ## 网页快速改尺码脚本
 
-`userscripts/landwu-payment-size-helper.user.js` 是给脚本猫 / Tampermonkey 使用的网页脚本。安装后打开 `https://user.landwu.com/` 的待付款页面，右下角会出现“待付款快速改尺码”浮窗；点击“刷新待付款”后，可直接把单个 SKU 改为“棉 / 涤纶 / 人棉 / 通用尺码”。浮窗可收起成贴在屏幕右侧的抽屉标签，避免挡住页面。
+`userscripts/landwu-payment-size-helper.user.js` 是给脚本猫 / Tampermonkey 使用的网页脚本。安装后打开 `https://user.landwu.com/` 的待付款页面，右侧默认显示“待付款快速改尺码”抽屉标签，点开后可点击“刷新待付款”，并直接把单个 SKU 改为“棉 / 涤纶 / 人棉 / 通用尺码”。浮窗可收起成贴在屏幕右侧的抽屉标签，刷新页面后会保持上次收起/展开状态。
 
 安装地址：`https://raw.githubusercontent.com/Frank-jpeg/landwu-order-tool/main/userscripts/landwu-payment-size-helper.user.js`
 

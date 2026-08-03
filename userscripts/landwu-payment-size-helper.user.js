@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Landwu 待付款快速改尺码
 // @namespace    https://user.landwu.com/
-// @version      2026.08.03.2
+// @version      2026.08.03.3
 // @description  在 Landwu 待付款页面快速把订单明细尺码改为棉、涤纶、人棉或通用尺码。
 // @match        https://user.landwu.com/*
 // @grant        none
@@ -13,13 +13,14 @@
 (function () {
   'use strict';
 
-  const SCRIPT_VERSION = '2026.08.03.2';
+  const SCRIPT_VERSION = '2026.08.03.3';
   const PANEL_ID = 'landwu-payment-size-helper';
   const STYLE_ID = `${PANEL_ID}-style`;
+  const COLLAPSED_STORAGE_KEY = `${PANEL_ID}-collapsed`;
   const SIZE_TARGETS = ['棉', '涤纶', '人棉', '通用尺码'];
 
   const state = {
-    collapsed: false,
+    collapsed: loadCollapsedPreference(),
     loading: false,
     rows: [],
     items: [],
@@ -47,6 +48,21 @@
     } catch (error) {
       return fallback;
     }
+  }
+
+  function loadCollapsedPreference() {
+    try {
+      const value = localStorage.getItem(COLLAPSED_STORAGE_KEY);
+      return value === null ? true : value !== '0';
+    } catch (error) {
+      return true;
+    }
+  }
+
+  function saveCollapsedPreference(collapsed) {
+    try {
+      localStorage.setItem(COLLAPSED_STORAGE_KEY, collapsed ? '1' : '0');
+    } catch (error) {}
   }
 
   function readAuth() {
@@ -553,6 +569,7 @@
       const action = target.dataset.action;
       if (action === 'toggle') {
         state.collapsed = !state.collapsed;
+        saveCollapsedPreference(state.collapsed);
         render();
       } else if (action === 'refresh') {
         loadPaymentOrders();
