@@ -24,6 +24,14 @@ python3 macos/领物做单器.py
 
 macOS 将登录态和本地设置保存在 `~/Library/Application Support/领物做单器/`。这相当于 Windows 的 `%AppData%`，更新或替换 `.app` 不应删除该目录。
 
+## 网页快速改尺码脚本
+
+`userscripts/landwu-payment-size-helper.user.js` 是给脚本猫 / Tampermonkey 使用的网页脚本。安装后打开 `https://user.landwu.com/` 的待付款页面，右下角会出现“待付款快速改尺码”浮窗；点击“刷新待付款”后，可直接把单个 SKU 改为“棉 / 涤纶 / 人棉 / 通用尺码”。浮窗可收起成贴在屏幕右侧的抽屉标签，避免挡住页面。
+
+安装地址：`https://raw.githubusercontent.com/Frank-jpeg/landwu-order-tool/main/userscripts/landwu-payment-size-helper.user.js`
+
+脚本只读取当前 Landwu 页面自己的登录态并调用 Landwu 接口，不包含 token、Cookie 或本地数据库文件。手机端可在支持 userscript 的浏览器里使用；第一版只做手动快速改尺码，不读取本机成分数据库。
+
 ## 更新
 
 两个版本的“设置”中均有“检查更新”。它会通过 HTTPS 从[公开仓库](https://github.com/Frank-jpeg/landwu-order-tool)直接读取对应源码，不要求安装 GitHub CLI 或登录 GitHub：
