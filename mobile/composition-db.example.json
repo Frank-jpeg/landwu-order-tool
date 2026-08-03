@@ -1,0 +1,23 @@
+[
+  {
+    "SKC_ID": "1234567890",
+    "SPU_ID": "9876543210",
+    "SKU": "SKU-DEMO-001",
+    "composition": "100%棉",
+    "target_size": "棉"
+  },
+  {
+    "SKC_ID": "1234567891",
+    "SPU_ID": "9876543211",
+    "SKU": "SKU-DEMO-002",
+    "composition": "92%聚酯纤维 8%氨纶",
+    "target_size": ""
+  },
+  {
+    "SKC_ID": "1234567892",
+    "SPU_ID": "9876543212",
+    "SKU": "SKU-DEMO-003",
+    "composition": "人棉混纺",
+    "target_size": "人棉"
+  }
+]
