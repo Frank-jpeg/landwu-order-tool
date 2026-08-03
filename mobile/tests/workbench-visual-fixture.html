@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Landwu 手机工作台视觉测试</title>
+</head>
+<body>
+  <main>模拟 Landwu 后台页面</main>
+  <script>
+    localStorage.setItem('access_token', 'fixture-token');
+    localStorage.setItem('user_info', JSON.stringify({
+      factory_id: 10001,
+      nickname: '测试账号'
+    }));
+
+    const tags = [
+      { id: 11, name: 'JIT' },
+      { id: 12, name: 'VMI' }
+    ];
+    const editRows = [
+      {
+        order_id: 'edit-1001',
+        order_no: 'LW-JIT-20260803001',
+        plat_order_type: 11,
+        plat_id: 7,
+        shop_name: 'TEMU 女装一店',
+        express_name: ''
+      },
+      {
+        order_id: 'edit-1002',
+        order_no: 'LW-JIT-20260803002',
+        plat_order_type: 11,
+        plat_id: 7,
+        shop_name: 'TEMU 女装二店',
+        express_name: ''
+      },
+      {
+        order_id: 'edit-1003',
+        order_no: 'LW-VMI-20260803003',
+        plat_order_type: 12,
+        plat_id: 7,
+        shop_name: 'TEMU VMI 店铺',
+        express_name: ''
+      }
+    ];
+    const paymentRows = [
+      {
+        order_id: 'pay-2001',
+        order_no: 'LW-JIT-20260803201',
+        plat_order_type: 11,
+        shop_name: 'TEMU 女装一店',
+        detail: [
+          { id: 'detail-1', sku: 'SKU-COTTON-001', skc: 'SKC-001', product_id: 'SPU-001', size: '通用尺码' }
+        ]
+      },
+      {
+        order_id: 'pay-2002',
+        order_no: 'LW-VMI-20260803202',
+        plat_order_type: 12,
+        shop_name: 'TEMU VMI 店铺',
+        detail: [
+          { id: 'detail-2', sku: 'SKU-RAYON-002', skc: 'SKC-002', product_id: 'SPU-002', size: '人棉' }
+        ]
+      }
+    ];
+    const compositionRows = [
+      { SKC_ID: 'SKC-001', composition: '100%棉', target_size: '棉' },
+      { SKC_ID: 'SKC-002', composition: '95%人棉 5%氨纶', target_size: '人棉' }
+    ];
+
+    class MockXMLHttpRequest {
+      constructor() {
+        this.headers = {};
+        this.status = 0;
+        this.responseText = '';
+        this.statusText = '';
+        this.timeout = 0;
+        this.withCredentials = false;
+      }
+
+      open(method, url) {
+        this.method = method;
+        this.url = url;
+      }
+
+      setRequestHeader(name, value) {
+        this.headers[name] = value;
+      }
+
+      send(body) {
+        window.setTimeout(() => {
+          let response = { code: 1, data: {} };
+          if (this.url.includes('composition-db.json')) {
+            response = compositionRows;
+          } else if (this.url.includes('/plat/getOrderPlatformTags')) {
+            response = { code: 1, data: tags };
+          } else if (this.url.includes('/order/getUserOrderList')) {
+            const payload = JSON.parse(body || '{}');
+            const rows = String(payload.status) === '1' ? editRows : paymentRows;
+            response = {
+              code: 1,
+              data: {
+                data: rows,
+                total: rows.length,
+                current_page: 1,
+                last_page: 1
+              }
+            };
+          } else if (this.url.includes('/logistic/getCompanyList')) {
+            response = {
+              code: 1,
+              data: [
+                { id: 77, logistic_id: 77, name: 'TEMU 官方物流', code: 'TEMU' }
+              ]
+            };
+          } else if (this.url.includes('/logistic/getOrderCompany')) {
+            response = {
+              code: 1,
+              data: {
+                ok_num: 2,
+                no_num: 0,
+                express: { id: 77, name: 'TEMU 官方物流', price: 0 }
+              }
+            };
+          } else if (this.url.includes('/logistic/changeExpressSave')) {
+            const payload = JSON.parse(body || '{}');
+            const index = editRows.findIndex((row) => String(row.order_id) === String(payload.order_id));
+            if (index >= 0) {
+              const moved = editRows.splice(index, 1)[0];
+              moved.express_name = 'TEMU 官方物流';
+              moved.detail = [
+                {
+                  id: 'moved-' + moved.order_id,
+                  sku: 'SKU-MOVED-' + moved.order_id,
+                  skc: 'SKC-001',
+                  product_id: 'SPU-001',
+                  size: '通用尺码'
+                }
+              ];
+              paymentRows.push(moved);
+            }
+            response = { code: 1, data: true };
+          } else if (this.url.includes('/order/getEditDetail')) {
+            const detailId = new URL(this.url).searchParams.get('ids');
+            const allDetails = paymentRows.flatMap((row) => row.detail || []);
+            const detail = allDetails.find((entry) => String(entry.id) === String(detailId)) || {};
+            response = {
+              code: 1,
+              data: {
+                data: {
+                  product_id: detail.product_id || 'SPU-001',
+                  size: {
+                    1: { name: '棉' },
+                    2: { name: '涤纶' },
+                    3: { name: '人棉' },
+                    4: { name: '通用尺码' }
+                  },
+                  color: {
+                    9: { name: '黑色' }
+                  },
+                  data: {
+                    id: detail.id,
+                    order_id: detail.order_id || 'fixture-order',
+                    product_id: detail.product_id || 'SPU-001',
+                    sku: detail.sku,
+                    size: detail.size,
+                    colour: '黑色',
+                    colour_id: 9,
+                    buy_number: 1
+                  }
+                }
+              }
+            };
+          } else if (this.url.includes('/order/relateOrderDetailSave')) {
+            const payload = JSON.parse(body || '{}');
+            const sizeNames = { 1: '棉', 2: '涤纶', 3: '人棉', 4: '通用尺码' };
+            paymentRows.forEach((row) => {
+              (row.detail || []).forEach((detail) => {
+                if (String(detail.id) === String(payload.order_detail_id)) {
+                  detail.size = sizeNames[payload.sizeId] || detail.size;
+                }
+              });
+            });
+            response = { code: 1, data: true };
+          }
+          this.status = 200;
+          this.statusText = 'OK';
+          this.responseText = JSON.stringify(response);
+          if (this.onload) this.onload();
+        }, 40);
+      }
+    }
+
+    window.XMLHttpRequest = MockXMLHttpRequest;
+    window.setInterval(() => {
+      const root = document.getElementById('landwu-mobile-workbench-v2');
+      if (root) {
+        root.style.width = '390px';
+        root.style.right = 'auto';
+      }
+    }, 100);
+    window.setTimeout(() => {
+      const query = new URLSearchParams(location.search);
+      if (query.get('tab') === 'payment') {
+        const tab = document.querySelector('[data-tab="payment"]');
+        if (tab) tab.click();
+      }
+      if (query.get('action') === 'advance') {
+        const advance = document.querySelector('[data-action="advance"]');
+        if (advance) advance.click();
+        window.setTimeout(() => {
+          const confirm = document.querySelector('[data-result="confirm"]');
+          if (confirm) confirm.click();
+        }, 120);
+      }
+      if (query.get('action') === 'batch') {
+        const tab = document.querySelector('[data-tab="payment"]');
+        if (tab) tab.click();
+        window.setTimeout(() => {
+          const apply = document.querySelector('[data-action="apply-suggestions"]');
+          if (apply) apply.click();
+          window.setTimeout(() => {
+            const confirm = document.querySelector('[data-result="confirm"]');
+            if (confirm) confirm.click();
+          }, 120);
+        }, 120);
+      }
+    }, 1200);
+  </script>
+  <script src="../landwu-mobile-v2026.08.03.2.user.js"></script>
+</body>
+</html>

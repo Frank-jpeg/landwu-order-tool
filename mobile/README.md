@@ -1,20 +1,20 @@
 # 领物手机版做单器
 
-这是手机端 userscript 版本，安装后会在 `https://user.landwu.com/` 页面内显示“领物手机版做单器”浮层。
+这是手机端独立做单工作台。安卓 APK 登录 Landwu 后会全屏显示工作台，不再使用不适配手机的领物后台界面；同一份脚本也可以单独安装为 userscript。
 
 ## 安装
 
 脚本地址：
 
 ```text
-https://raw.githubusercontent.com/Frank-jpeg/landwu-order-tool/codex/landwu-mobile/mobile/landwu-mobile.user.js
+https://raw.githubusercontent.com/Frank-jpeg/landwu-order-tool/codex/landwu-mobile/mobile/landwu-mobile-v2026.08.03.2.user.js
 ```
 
 安卓建议用支持 userscript 的浏览器安装脚本猫或 Tampermonkey。iPhone 可用支持 userscript 的 Safari 扩展。安装后，用同一个手机浏览器打开并登录 `https://user.landwu.com/`。
 
 ## 安卓 APK 套壳
 
-如果手机浏览器不支持扩展，可以构建一个简单 APK 套壳。它内置 Android WebView，启动后打开 `https://user.landwu.com/`；登录领物后自动注入 `landwu-mobile.user.js` 做单面板。
+如果手机浏览器不支持扩展，可以直接安装 APK。它内置 Android WebView，启动后打开 `https://user.landwu.com/`；登录领物后自动进入全屏做单工作台。
 
 本机已有 Android SDK 时运行：
 
@@ -28,7 +28,7 @@ https://raw.githubusercontent.com/Frank-jpeg/landwu-order-tool/codex/landwu-mobi
 mobile/android/build/outputs/landwu-mobile-debug.apk
 ```
 
-这是 debug 签名 APK，适合自用测试。首次安装可能需要在安卓手机上允许“安装未知来源应用”。
+这是固定签名的测试 APK，同一台手机后续可以直接覆盖更新。首次安装可能需要允许“安装未知来源应用”。
 
 ## 登录态
 
@@ -36,14 +36,15 @@ mobile/android/build/outputs/landwu-mobile-debug.apk
 
 ## 功能范围
 
-- 刷新待付款订单。
-- 显示订单号、SKU、SKC、SPU、当前尺码。
-- 按公开成分数据库给出建议尺码。
-- 手动改为 `棉 / 涤纶 / 人棉 / 通用尺码`。
-- 提交前二次确认，成功标绿，失败标红。
+- 显示待编辑、JIT、VMI 和待付款数量。
+- 一键预检并把全部待编辑 JIT 改为 TEMU 物流，随后等待订单进入待付款。
+- VMI 只显示，不参与改物流。
+- 待付款页按公开成分数据库匹配建议尺码。
+- 一键修改全部匹配项，也可手动改为 `棉 / 涤纶 / 人棉 / 通用尺码`。
+- 批量任务实时显示当前订单、完成进度、成功和失败结果。
 - 提醒仍是“通用尺码”的 SKU。
 
-v1 不做支付、改物流、图片下载或桌面端完整一键流程。
+当前版本不做支付、图片下载或桌面端完整付款流程。
 
 ## 成分数据库
 
@@ -53,7 +54,7 @@ v1 不做支付、改物流、图片下载或桌面端完整一键流程。
 https://raw.githubusercontent.com/Frank-jpeg/landwu-order-tool/codex/landwu-mobile/mobile/composition-db.json
 ```
 
-`composition-db.json` 当前是空数组。要启用网络匹配，把公开可用的记录按下面格式填进去并提交到 `codex/landwu-mobile` 分支：
+`composition-db.json` 由导出脚本生成并提交到 `codex/landwu-mobile` 分支，手机有网络时自动下载；成功下载后也会保存在 APK 的本机缓存中。记录格式如下：
 
 ```json
 [

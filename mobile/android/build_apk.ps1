@@ -5,6 +5,7 @@ $OutputEncoding = [System.Text.UTF8Encoding]::new()
 
 $ProjectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoMobileDir = Split-Path -Parent $ProjectDir
+$ScriptSource = Join-Path $RepoMobileDir "landwu-mobile-v2026.08.03.2.user.js"
 $SdkRoot = $env:ANDROID_SDK_ROOT
 if (-not $SdkRoot) { $SdkRoot = $env:ANDROID_HOME }
 if (-not $SdkRoot) { $SdkRoot = "G:\Android\Sdk" }
@@ -38,7 +39,8 @@ $OutputsDir = Join-Path $BuildDir "outputs"
 Remove-Item -LiteralPath $BuildDir -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $CompiledDir, $GeneratedDir, $ClassesDir, $DexDir, $AssetsDir, $OutputsDir | Out-Null
 
-Copy-Item -LiteralPath (Join-Path $RepoMobileDir "landwu-mobile.user.js") -Destination (Join-Path $AssetsDir "landwu-mobile.user.js")
+if (-not (Test-Path -LiteralPath $ScriptSource)) { throw "手机版工作台脚本不存在：$ScriptSource" }
+Copy-Item -LiteralPath $ScriptSource -Destination (Join-Path $AssetsDir "landwu-mobile.user.js")
 
 $CompiledZip = Join-Path $CompiledDir "resources.zip"
 & $Aapt2 compile --dir (Join-Path $ProjectDir "res") -o $CompiledZip
@@ -72,17 +74,19 @@ $AlignedApk = Join-Path $BuildDir "landwu-mobile-aligned.apk"
 & $ZipAlign -f 4 $UnsignedApk $AlignedApk
 if ($LASTEXITCODE -ne 0) { throw "zipalign 失败" }
 
-$Keystore = Join-Path $BuildDir "debug.keystore"
-& keytool -genkeypair -v `
-  -keystore $Keystore `
-  -storepass android `
-  -alias androiddebugkey `
-  -keypass android `
-  -keyalg RSA `
-  -keysize 2048 `
-  -validity 10000 `
-  -dname "CN=Android Debug,O=Android,C=US" | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "生成 debug keystore 失败" }
+$Keystore = Join-Path $ProjectDir "landwu-mobile-debug.keystore"
+if (-not (Test-Path -LiteralPath $Keystore)) {
+  & keytool -genkeypair -v `
+    -keystore $Keystore `
+    -storepass android `
+    -alias androiddebugkey `
+    -keypass android `
+    -keyalg RSA `
+    -keysize 2048 `
+    -validity 10000 `
+    -dname "CN=Android Debug,O=Android,C=US" | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "生成 debug keystore 失败" }
+}
 
 $FinalApk = Join-Path $OutputsDir "landwu-mobile-debug.apk"
 & $ApkSigner sign `
