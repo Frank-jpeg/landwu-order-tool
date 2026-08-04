@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Landwu 待付款快速改尺码
 // @namespace    https://user.landwu.com/
-// @version      2026.08.03.4
+// @version      2026.08.04.1
 // @description  在 Landwu 待付款页面快速把订单明细尺码改为棉、涤纶、人棉或通用尺码。
 // @match        https://user.landwu.com/*
 // @grant        none
@@ -13,7 +13,7 @@
 (function () {
   'use strict';
 
-  const SCRIPT_VERSION = '2026.08.03.4';
+  const SCRIPT_VERSION = '2026.08.04.1';
   const PANEL_ID = 'landwu-payment-size-helper';
   const STYLE_ID = `${PANEL_ID}-style`;
   const COLLAPSED_STORAGE_KEY = `${PANEL_ID}-collapsed`;
@@ -27,6 +27,8 @@
     status: '待命',
     itemStatus: new Map(),
     busyIds: new Set(),
+    pendingTargets: new Map(),
+    submitting: false,
   };
 
   function escapeHtml(value) {
@@ -144,6 +146,24 @@
     return [];
   }
 
+  function getPendingChanges() {
+    return state.items
+      .map((item) => {
+        const targetSize = normalizeText(state.pendingTargets.get(item.key));
+        const currentSize = normalizeText(item.currentSize);
+        if (!targetSize || targetSize === currentSize) return null;
+        return { item, targetSize };
+      })
+      .filter(Boolean);
+  }
+
+  function formatOrderPreview(changes) {
+    const orderNos = [...new Set(changes.map(({ item }) => normalizeText(item.orderNo)).filter(Boolean))];
+    if (!orderNos.length) return '无订单号';
+    const preview = orderNos.slice(0, 5).join('、');
+    return orderNos.length > 5 ? `${preview} 等 ${orderNos.length} 个订单` : preview;
+  }
+
   async function loadPaymentOrders() {
     state.loading = true;
     state.status = '正在读取待付款订单...';
@@ -156,6 +176,8 @@
       });
       state.rows = getRowsFromOrderList(result);
       state.items = buildSizeItems(state.rows);
+      state.pendingTargets.clear();
+      state.itemStatus.clear();
       state.status = `已读取 ${state.rows.length} 个待付款订单，${state.items.length} 个 SKU 可处理。`;
     } catch (error) {
       state.status = `读取失败：${error.message || error}`;
@@ -297,26 +319,70 @@
     return { fromSize: current.size || '', toSize: target, sizeId: targetSizeId };
   }
 
-  async function handleChangeSize(orderDetailId, targetSize) {
+  function handleSelectSize(orderDetailId, targetSize) {
+    if (state.submitting) return;
     const item = state.items.find((entry) => entry.key === orderDetailId);
     if (!item) return;
-    const label = `${item.orderNo || '(无订单号)'} / SKU ${item.sku}`;
-    if (!window.confirm(`确认把 ${label} 改为“${targetSize}”吗？`)) return;
-
-    state.busyIds.add(orderDetailId);
-    state.itemStatus.set(orderDetailId, `正在改为 ${targetSize}...`);
+    const target = normalizeText(targetSize);
+    const current = normalizeText(item.currentSize);
+    if (!target || target === current) return;
+    if (state.pendingTargets.get(orderDetailId) === target) {
+      state.pendingTargets.delete(orderDetailId);
+      state.itemStatus.delete(orderDetailId);
+    } else {
+      state.pendingTargets.set(orderDetailId, target);
+      state.itemStatus.set(orderDetailId, `待提交：改为 ${target}`);
+    }
+    const pendingCount = getPendingChanges().length;
+    state.status = pendingCount
+      ? `已选择 ${pendingCount} 个 SKU，点击“提交修改”后统一提交。`
+      : '已取消选择，当前没有待提交修改。';
     render();
-    try {
-      await changeSize(item, targetSize);
-      state.itemStatus.set(orderDetailId, `已改为 ${targetSize}`);
-      state.status = `${item.orderNo || item.sku} 已改为 ${targetSize}`;
-    } catch (error) {
-      state.itemStatus.set(orderDetailId, `失败：${error.message || error}`);
-      state.status = `${item.orderNo || item.sku} 修改失败`;
-    } finally {
-      state.busyIds.delete(orderDetailId);
+  }
+
+  async function handleSubmitSizeChanges() {
+    if (state.submitting) return;
+    const changes = getPendingChanges();
+    if (!changes.length) {
+      state.status = '请先选择要修改的目标尺码。';
+      render();
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `将提交 ${changes.length} 个 SKU，涉及订单：${formatOrderPreview(changes)}。\n\n确定统一提交吗？`,
+    );
+    if (!confirmed) return;
+
+    state.submitting = true;
+    state.status = `正在提交 ${changes.length} 个 SKU，请稍候...`;
+    changes.forEach(({ item }) => state.busyIds.add(item.key));
+    render();
+
+    let successCount = 0;
+    let failedCount = 0;
+    for (const { item, targetSize } of changes) {
+      state.itemStatus.set(item.key, `正在改为 ${targetSize}...`);
+      render();
+      try {
+        await changeSize(item, targetSize);
+        state.pendingTargets.delete(item.key);
+        state.itemStatus.set(item.key, `已改为 ${targetSize}`);
+        successCount += 1;
+      } catch (error) {
+        state.itemStatus.set(item.key, `失败：${error.message || error}`);
+        failedCount += 1;
+      }
+      state.busyIds.delete(item.key);
+      state.status = `提交进度：成功 ${successCount}，失败 ${failedCount}，共 ${changes.length}`;
       render();
     }
+
+    state.submitting = false;
+    state.status = failedCount
+      ? `提交完成：成功 ${successCount} 个，失败 ${failedCount} 个；失败项仍保留待提交选择。`
+      : `提交完成：成功修改 ${successCount} 个 SKU。`;
+    render();
   }
 
   function injectStyle() {
@@ -395,17 +461,23 @@
       #${PANEL_ID}[data-collapsed="1"] .lw-body { display: none; }
       #${PANEL_ID} .lw-toolbar {
         display: flex;
+        flex-wrap: wrap;
         gap: 8px;
         padding: 9px 10px 7px;
         background: #f8fafc;
         border-bottom: 1px solid #e5e7eb;
       }
       #${PANEL_ID} .lw-toolbar button {
+        flex: 1 1 150px;
         padding: 6px 10px;
         background: #16a34a;
         border-color: #15803d;
         color: #fff;
         font-weight: 700;
+      }
+      #${PANEL_ID} .lw-toolbar button[data-action="submit"] {
+        background: #2563eb;
+        border-color: #1d4ed8;
       }
       #${PANEL_ID} .lw-status {
         padding: 0 10px 8px;
@@ -483,6 +555,10 @@
         background: #f3f4f6;
         border-color: #d1d5db;
       }
+      #${PANEL_ID} .lw-actions button[data-selected="1"] {
+        box-shadow: 0 0 0 2px #111827 inset;
+        font-weight: 700;
+      }
       #${PANEL_ID} .lw-note {
         margin-top: 6px;
         color: #64748b;
@@ -513,13 +589,15 @@
   }
 
   function itemMarkup(item) {
-    const note = state.itemStatus.get(item.key) || '';
-    const busy = state.busyIds.has(item.key);
+    const pendingTarget = normalizeText(state.pendingTargets.get(item.key));
+    const note = state.itemStatus.get(item.key) || (pendingTarget ? `待提交：改为 ${pendingTarget}` : '');
+    const busy = state.submitting || state.busyIds.has(item.key);
     const currentSize = normalizeText(item.currentSize) || '-';
     const isGeneric = currentSize === '通用尺码';
     const buttons = SIZE_TARGETS.map((target) => {
       const disabled = busy || target === currentSize ? ' disabled' : '';
-      return `<button type="button" data-action="change" data-id="${escapeHtml(item.key)}" data-target="${escapeHtml(target)}"${disabled}>${escapeHtml(target)}</button>`;
+      const selected = target === pendingTarget ? ' data-selected="1"' : '';
+      return `<button type="button" data-action="select" data-id="${escapeHtml(item.key)}" data-target="${escapeHtml(target)}"${selected}${disabled}>${escapeHtml(target)}</button>`;
     }).join('');
     return `
       <div class="lw-item">
@@ -542,6 +620,7 @@
       panel.id = PANEL_ID;
       document.body.appendChild(panel);
     }
+    const pendingCount = getPendingChanges().length;
     const body = state.items.length
       ? `<div class="lw-list">${state.items.map(itemMarkup).join('')}</div>`
       : `<div class="lw-empty">${state.loading ? '正在读取...' : '没有读取到可处理的待付款 SKU。'}</div>`;
@@ -554,12 +633,23 @@
       </div>
       <div class="lw-body">
         <div class="lw-toolbar">
-          <button type="button" data-action="refresh" ${state.loading ? 'disabled' : ''}>刷新待付款</button>
+          <button type="button" data-action="refresh" ${state.loading || state.submitting ? 'disabled' : ''}>刷新待付款</button>
+          <button type="button" data-action="submit" ${!pendingCount || state.loading || state.submitting ? 'disabled' : ''}>提交修改${pendingCount ? `（${pendingCount}）` : ''}</button>
         </div>
         <div class="lw-status">${escapeHtml(state.status)}</div>
         ${body}
       </div>
     `;
+  }
+
+  function handleRefresh() {
+    const pendingCount = getPendingChanges().length;
+    if (pendingCount && !window.confirm(`刷新会清除已选择的 ${pendingCount} 个待提交修改，确定继续吗？`)) {
+      return;
+    }
+    state.pendingTargets.clear();
+    state.itemStatus.clear();
+    loadPaymentOrders();
   }
 
   function bindEvents() {
@@ -572,9 +662,11 @@
         saveCollapsedPreference(state.collapsed);
         render();
       } else if (action === 'refresh') {
-        loadPaymentOrders();
-      } else if (action === 'change') {
-        handleChangeSize(target.dataset.id, target.dataset.target);
+        handleRefresh();
+      } else if (action === 'submit') {
+        handleSubmitSizeChanges();
+      } else if (action === 'select') {
+        handleSelectSize(target.dataset.id, target.dataset.target);
       }
     });
   }
