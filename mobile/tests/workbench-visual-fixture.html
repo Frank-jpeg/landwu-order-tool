@@ -68,6 +68,7 @@
       { SKC_ID: 'SKC-001', composition: '100%棉', target_size: '棉' },
       { SKC_ID: 'SKC-002', composition: '95%人棉 5%氨纶', target_size: '人棉' }
     ];
+    window.fixtureRequestLog = [];
 
     class MockXMLHttpRequest {
       constructor() {
@@ -89,6 +90,8 @@
       }
 
       send(body) {
+        window.fixtureRequestLog.push({ method: this.method, url: this.url, body: body || '' });
+        document.body.dataset.fixtureRequests = window.fixtureRequestLog.map((item) => new URL(item.url).pathname).join(',');
         window.setTimeout(() => {
           let response = { code: 1, data: {} };
           if (this.url.includes('composition-db.json')) {
@@ -183,6 +186,25 @@
               });
             });
             response = { code: 1, data: true };
+          } else if (this.url.includes('/order/getCheckOrder')) {
+            const payload = JSON.parse(body || '{}');
+            response = new URLSearchParams(location.search).get('preview') === 'fail'
+              ? { code: 1, data: { success: false, message: '预检未通过：测试风险' } }
+              : {
+                code: 1,
+                data: {
+                  success: true,
+                  order_ids: String(payload.ids || '').split(',').filter(Boolean),
+                  message: '预检通过，无异常'
+                }
+              };
+          } else if (this.url.includes('/order/orderPay')) {
+            const payload = JSON.parse(body || '{}');
+            const paidIds = new Set(String(payload.ids || '').split(',').filter(Boolean));
+            for (let index = paymentRows.length - 1; index >= 0; index -= 1) {
+              if (paidIds.has(String(paymentRows[index].order_id))) paymentRows.splice(index, 1);
+            }
+            response = { code: 1, data: { success: true, paid_ids: Array.from(paidIds) } };
           }
           this.status = 200;
           this.statusText = 'OK';
@@ -220,6 +242,18 @@
         window.setTimeout(() => {
           const apply = document.querySelector('[data-action="apply-suggestions"]');
           if (apply) apply.click();
+          window.setTimeout(() => {
+            const confirm = document.querySelector('[data-result="confirm"]');
+            if (confirm) confirm.click();
+          }, 120);
+        }, 120);
+      }
+      if (query.get('action') === 'pay') {
+        const tab = document.querySelector('[data-tab="payment"]');
+        if (tab) tab.click();
+        window.setTimeout(() => {
+          const pay = document.querySelector('[data-action="pay-jit"]');
+          if (pay) pay.click();
           window.setTimeout(() => {
             const confirm = document.querySelector('[data-result="confirm"]');
             if (confirm) confirm.click();

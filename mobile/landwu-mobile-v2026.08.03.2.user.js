@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Landwu 手机做单工作台
 // @namespace    https://user.landwu.com/
-// @version      2026.08.03.2
-// @description  手机端独立处理待编辑 JIT 改 TEMU 物流、待付款成分尺码匹配。
+// @version      2026.08.09.1
+// @description  手机端独立处理 JIT 物流、成分尺码与支付。
 // @match        https://user.landwu.com/*
 // @grant        none
 // @run-at       document-idle
@@ -13,7 +13,7 @@
 (function () {
   'use strict';
 
-  var SCRIPT_VERSION = '2026.08.03.2';
+  var SCRIPT_VERSION = '2026.08.09.1';
   var ROOT_ID = 'landwu-mobile-workbench-v2';
   var STYLE_ID = ROOT_ID + '-style';
   var CONFIRM_ID = ROOT_ID + '-confirm';
@@ -147,7 +147,9 @@
         url.searchParams.set(key, String(query[key] === null || query[key] === undefined ? '' : query[key]));
       });
     } else {
-      body = JSON.stringify(Object.assign({}, payload || {}, { api_token: auth.token, lange: 'zh-CN' }));
+      var bodyPayload = Object.assign({}, payload || {}, { api_token: auth.token });
+      if (!bodyPayload.lange) bodyPayload.lange = 'zh-CN';
+      body = JSON.stringify(bodyPayload);
     }
 
     var response = await requestText(upperMethod, url.toString(), headers, body, 60000);
@@ -499,11 +501,21 @@
     return normalizeText(row.tag_name).toUpperCase() === 'VMI';
   }
 
+  function orderIdFor(row) {
+    return normalizeText((row || {}).order_id || (row || {}).id);
+  }
+
+  function getPaymentJitRows(rows) {
+    return (rows || state.paymentOrders).filter(function (row) {
+      return isJitOrder(row) && Boolean(orderIdFor(row));
+    });
+  }
+
   function getCounts() {
     var jit = state.editOrders.filter(isJitOrder).length;
     var vmi = state.editOrders.filter(isVmiOrder).length;
     var generic = state.items.filter(function (item) {
-      return normalizeText(item.currentSize) === '通用尺码';
+      return normalizeText(item.tagName).toUpperCase() === 'JIT' && normalizeText(item.currentSize) === '通用尺码';
     }).length;
     var matched = state.items.filter(function (item) {
       var suggestion = findSuggestion(item);
@@ -518,6 +530,7 @@
       jit: jit,
       vmi: vmi,
       payment: state.paymentOrders.length,
+      paymentJit: getPaymentJitRows().length,
       generic: generic,
       matched: matched,
       actionable: actionable,
@@ -892,6 +905,176 @@
     render();
   }
 
+  function textHasPaymentRisk(value) {
+    var text = normalizeText(value);
+    if (!text) return false;
+    var negativeTerms = ['失败', '错误', '不可', '不能', '无法', '不支持', '余额不足', '未通过', '已取消', '不存在', '无效', '风险'];
+    if (negativeTerms.some(function (term) { return text.indexOf(term) >= 0; })) return true;
+    return text.indexOf('异常') >= 0 && ['无异常', '没有异常', '未发现异常'].every(function (term) {
+      return text.indexOf(term) < 0;
+    });
+  }
+
+  function inspectPaymentPreviewIds(preview, expectedIds) {
+    var expected = expectedIds.map(String);
+    var found = new Set();
+    var sawOrderIdField = false;
+
+    function scanScalar(value) {
+      if (value === null || value === undefined || typeof value === 'boolean') return;
+      var text = String(value);
+      expected.forEach(function (expectedId) {
+        var escaped = expectedId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if ((new RegExp('(^|\\D)' + escaped + '(\\D|$)')).test(text)) found.add(expectedId);
+      });
+    }
+
+    function scanValue(value) {
+      if (Array.isArray(value)) value.forEach(scanValue);
+      else if (value && typeof value === 'object') Object.keys(value).forEach(function (key) { scanValue(value[key]); });
+      else scanScalar(value);
+    }
+
+    function walk(value) {
+      if (Array.isArray(value)) {
+        value.forEach(walk);
+        return;
+      }
+      if (!value || typeof value !== 'object') return;
+      Object.keys(value).forEach(function (key) {
+        var normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if ((normalizedKey.indexOf('order') >= 0 && normalizedKey.indexOf('id') >= 0) || normalizedKey === 'ids' || normalizedKey === 'idlist') {
+          sawOrderIdField = true;
+        }
+        if (normalizedKey.indexOf('id') >= 0 || normalizedKey.indexOf('order') >= 0) scanValue(value[key]);
+        walk(value[key]);
+      });
+    }
+
+    walk(preview);
+    return { found: found, sawOrderIdField: sawOrderIdField };
+  }
+
+  function validatePaymentPreview(preview, expectedIds) {
+    var issues = [];
+    var goodKeys = ['ok', 'success', 'pass', 'passed', 'canpay', 'allowpay', 'allowedpay', 'available', 'valid', 'checked'];
+    var badKeys = ['error', 'haserror', 'fail', 'failed', 'invalid', 'disabled', 'risk', 'hasrisk', 'rejected', 'abnormal', 'hasabnormal', 'unpayable'];
+    var badListTokens = ['error', 'fail', 'invalid', 'abnormal', 'unpay', 'reject', 'disable', 'risk'];
+
+    function addIssue(message) {
+      if (issues.indexOf(message) < 0 && issues.length < 20) issues.push(message);
+    }
+
+    function walk(value, path) {
+      if (Array.isArray(value)) {
+        value.forEach(function (item, index) { walk(item, path + '[' + index + ']'); });
+        return;
+      }
+      if (!value || typeof value !== 'object') {
+        if (typeof value === 'string' && textHasPaymentRisk(value)) addIssue(path + '：' + value.slice(0, 80));
+        return;
+      }
+      Object.keys(value).forEach(function (key) {
+        var child = value[key];
+        var keyName = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+        var childPath = path + '.' + key;
+        if (typeof child === 'boolean') {
+          if (goodKeys.indexOf(keyName) >= 0 && !child) addIssue(childPath + '=false');
+          if (badKeys.indexOf(keyName) >= 0 && child) addIssue(childPath + '=true');
+        } else if (typeof child === 'number') {
+          if (goodKeys.indexOf(keyName) >= 0 && child === 0) addIssue(childPath + '=0');
+          if (badKeys.indexOf(keyName) >= 0 && child !== 0) addIssue(childPath + '=' + child);
+        } else if (typeof child === 'string' && textHasPaymentRisk(child)) {
+          addIssue(childPath + '：' + child.slice(0, 80));
+        } else if (Array.isArray(child) && child.length && badListTokens.some(function (token) { return keyName.indexOf(token) >= 0; })) {
+          addIssue(childPath + ' 非空');
+        }
+        walk(child, childPath);
+      });
+    }
+
+    if (!expectedIds.length) addIssue('没有待支付订单');
+    if (!preview || typeof preview !== 'object' || Array.isArray(preview) || !Object.keys(preview).length) {
+      addIssue('支付预检返回为空');
+    }
+    walk(preview, 'preview');
+    var previewIds = inspectPaymentPreviewIds(preview, expectedIds);
+    var missingIds = expectedIds.filter(function (id) { return !previewIds.found.has(String(id)); });
+    if ((previewIds.found.size || previewIds.sawOrderIdField) && missingIds.length) {
+      addIssue('支付预检未覆盖订单 ID：' + missingIds.slice(0, 5).join(','));
+    }
+    if (issues.length) throw new Error('支付预检未通过，已阻止支付：' + issues.slice(0, 5).join('；'));
+  }
+
+  function requireSamePaymentScope(expectedIds, rows) {
+    var expected = expectedIds.map(String).sort();
+    var actual = getPaymentJitRows(rows).map(orderIdFor).sort();
+    if (expected.length !== actual.length || expected.some(function (id, index) { return id !== actual[index]; })) {
+      throw new Error('待付款 JIT 订单范围已变化，已阻止支付。请刷新后重新确认');
+    }
+    return actual;
+  }
+
+  function paymentOrderPreview(rows, limit) {
+    var values = rows.map(function (row) { return normalizeText(row.order_no) || orderIdFor(row); }).filter(Boolean);
+    var max = limit || 6;
+    return values.slice(0, max).join('、') + (values.length > max ? '等 ' + values.length + ' 单' : '');
+  }
+
+  async function payAllJitOrders() {
+    if (state.busyAction) return;
+    var rows = getPaymentJitRows();
+    if (!rows.length) {
+      showToast('当前没有待付款 JIT', 'warning');
+      return;
+    }
+    var expectedIds = rows.map(orderIdFor);
+    var expectedIdSet = new Set(expectedIds);
+    var genericItems = state.items.filter(function (item) {
+      return expectedIdSet.has(String(item.orderId)) && normalizeText(item.currentSize) === '通用尺码';
+    });
+    var message = [
+      '将对 ' + rows.length + ' 个待付款 JIT 先预检，通过后真实支付。',
+      'VMI 不会支付。',
+      '订单：' + paymentOrderPreview(rows),
+    ];
+    if (genericItems.length) {
+      message.push('', '警告：' + genericItems.length + ' 个 SKU 仍是“通用尺码”。');
+    }
+    message.push('', '请确认订单、图片和尺码无误。');
+    var confirmed = await showConfirm('确认真实支付', message.join('\n'), genericItems.length ? '仍要支付' : '预检并支付');
+    if (!confirmed) return;
+
+    state.busyAction = 'payment';
+    render();
+    try {
+      if (!state.jitTag || !state.jitTag.id) throw new Error('未找到 JIT 平台标签，已阻止支付');
+      setOperation('正在核对待付款 JIT', '重新读取订单范围', 0, 3, 'working');
+      var liveRows = enrichOrders(await listAllOrders(2, state.jitTag.id));
+      var liveIds = requireSamePaymentScope(expectedIds, liveRows);
+
+      setOperation('正在支付预检', '检查 ' + liveIds.length + ' 个 JIT', 1, 3, 'working');
+      var previewResult = await apiRequest('POST', '/order/getCheckOrder', { ids: liveIds.join(','), lange: 'zh' });
+      var preview = previewResult.data || {};
+      validatePaymentPreview(preview, liveIds);
+
+      setOperation('支付预检通过', '最后核对订单范围', 2, 3, 'working');
+      var latestRows = enrichOrders(await listAllOrders(2, state.jitTag.id));
+      requireSamePaymentScope(liveIds, latestRows);
+      await apiRequest('POST', '/order/orderPay', { ids: liveIds.join(',') });
+
+      setOperation('支付已提交', '成功提交 ' + liveIds.length + ' 个待付款 JIT', 3, 3, 'success');
+      showToast('已提交支付 ' + liveIds.length + ' 单', 'success');
+      await refreshOrders(true);
+    } catch (error) {
+      setOperation('支付已停止', error.message || String(error), 0, 3, 'error');
+      showToast(error.message || String(error), 'error');
+    } finally {
+      state.busyAction = '';
+      render();
+    }
+  }
+
   function showToast(message, tone) {
     state.toast = { message: normalizeText(message), tone: tone || 'info' };
     render();
@@ -1049,6 +1232,15 @@
       state.busyAction === 'size-batch' ? '正在修改...' : '修改匹配项 (' + counts.actionable + ')',
       '</button>',
       '</section>',
+      '<section class="lw-action-band lw-pay-band">',
+      '<div><span class="lw-eyebrow">待付款 JIT</span>',
+      '<h2>', counts.paymentJit, ' 单可支付</h2>',
+      '<p>支付前会重新核对订单并执行预检，VMI 自动跳过。</p></div>',
+      '<button type="button" class="lw-primary-action lw-pay-action" data-action="pay-jit"',
+      (!counts.paymentJit || state.busyAction ? ' disabled' : ''), '>',
+      state.busyAction === 'payment' ? '正在预检...' : '预检并支付 JIT',
+      '</button>',
+      '</section>',
       operationMarkup(),
       '<div class="lw-section-title"><strong>待付款明细</strong><span>', state.items.length, ' 个 SKU</span></div>',
       list,
@@ -1092,6 +1284,10 @@
       '#' + ROOT_ID + ' .lw-primary-action { width: 100%; min-width: 0; min-height: 52px; padding: 10px 12px; border: 0; border-radius: 6px; color: #fff; background: #168a50; font-weight: 800; white-space: normal; overflow-wrap: anywhere; box-shadow: 0 4px 12px rgba(12, 91, 52, .18); }',
       '#' + ROOT_ID + ' .lw-primary-action:active { background: #116d3f; }',
       '#' + ROOT_ID + ' .lw-primary-action:disabled { color: #8d959e; background: #dfe3e6; box-shadow: none; }',
+      '#' + ROOT_ID + ' .lw-pay-band { border-top: 1px solid #dfe3e8; }',
+      '#' + ROOT_ID + ' .lw-pay-action { background: #b42318; box-shadow: 0 4px 12px rgba(180, 35, 24, .18); }',
+      '#' + ROOT_ID + ' .lw-pay-action:active { background: #8f1c13; }',
+      '#' + ROOT_ID + ' .lw-pay-action:disabled { color: #8d959e; background: #dfe3e6; box-shadow: none; }',
       '#' + ROOT_ID + ' .lw-section-title { display: flex; align-items: center; justify-content: space-between; padding: 15px 14px 8px; color: #343a42; }',
       '#' + ROOT_ID + ' .lw-section-title span { color: #7b838d; font-size: 12px; }',
       '#' + ROOT_ID + ' .lw-order-list, #' + ROOT_ID + ' .lw-size-list { margin: 0 10px; background: #fff; border: 1px solid #dfe3e8; border-radius: 6px; overflow: hidden; }',
@@ -1246,6 +1442,8 @@
         loadCompositionDb(true);
       } else if (action === 'apply-suggestions') {
         applyAllSuggestions();
+      } else if (action === 'pay-jit') {
+        payAllJitOrders();
       } else if (action === 'change-size') {
         handleChangeSize(target.dataset.id, target.dataset.target);
       }
