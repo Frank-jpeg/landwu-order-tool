@@ -28,7 +28,9 @@ https://raw.githubusercontent.com/Frank-jpeg/landwu-order-tool/codex/landwu-mobi
 mobile/android/build/outputs/landwu-mobile-debug.apk
 ```
 
-这是固定签名的测试 APK，同一台手机后续可以直接覆盖更新。首次安装可能需要允许“安装未知来源应用”。
+这是固定签名的测试 APK，同一台手机后续可以直接覆盖更新。首次安装可能需要允许“安装未知来源应用”。`mobile/android/build/` 是本机构建产物，不提交到仓库。
+
+发布新版时，新建带版本号的 userscript，并同步更新脚本元数据、`build_apk.ps1` 的脚本来源、Android manifest 版本和本页安装地址，再重新构建 APK。
 
 ## 登录态
 

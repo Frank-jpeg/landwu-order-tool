@@ -16,6 +16,15 @@ python3 macos/领物做单器.py
 
 如果使用已打包的 `.app`，双击应用即可。该应用包含启动器、内置 Python 环境和实际运行源码；它们均不提交到仓库。
 
+## 手机版
+
+手机版位于 `mobile/`，维护在 `codex/landwu-mobile` 分支，提供两种使用方式：
+
+- Android APK：内置 WebView，登录 Landwu 后显示全屏做单工作台。
+- Userscript：安装到支持脚本猫或 Tampermonkey 的手机浏览器，在 Landwu 页面内运行同一工作台。
+
+手机版支持待编辑 JIT 推进待付款、云端成分匹配、尺码修改、在线大图核对以及 JIT 支付预检与支付。安装、构建和数据库更新方式见 [`mobile/README.md`](mobile/README.md)。
+
 ## 登录态同步
 
 在“设置”中点击“一键复制同步脚本”，将脚本粘贴到 Tampermonkey 并启用。随后点击“接收登录态3分钟”，打开或刷新 `https://user.landwu.com/` 即可将登录态同步到本机。
@@ -67,5 +76,5 @@ Windows 和 macOS 都支持在“设置”中选择成分数据库文件夹，�
 - Windows 只修改根目录 `领物做单器.pyw`。
 - macOS 只修改 `macos/领物做单器.py`。
 - 不要提交 `auth-state-v1.json`、Cookie、token、本地订单数据或浏览器登录态。
-- 推送前执行 `git pull --rebase origin main`，发生冲突时先解决冲突，不要强制推送。
+- 推送前从当前交付分支拉取并 rebase；桌面端使用 `main`，手机版使用 `codex/landwu-mobile`。发生冲突时先解决冲突，不要强制推送。
 - 面向用户的功能改动需同时检查 Windows 与 macOS 源码。
