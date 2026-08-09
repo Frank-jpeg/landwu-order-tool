@@ -18,6 +18,8 @@
       { id: 11, name: 'JIT' },
       { id: 12, name: 'VMI' }
     ];
+    const fixtureImageA = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 480 640%22%3E%3Crect width=%22480%22 height=%22640%22 fill=%22%23f8efe4%22/%3E%3Cpath d=%22M160 138h160l62 118-52 38-34-54v264H184V240l-34 54-52-38z%22 fill=%22%23ffffff%22 stroke=%22%2320242a%22 stroke-width=%2212%22/%3E%3Ctext x=%22240%22 y=%22572%22 text-anchor=%22middle%22 font-family=%22Arial%22 font-size=%2246%22 fill=%22%2320242a%22%3ELOOK A%3C/text%3E%3C/svg%3E';
+    const fixtureImageB = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 480 640%22%3E%3Crect width=%22480%22 height=%22640%22 fill=%22%23e8f3ef%22/%3E%3Cpath d=%22M150 132h180l48 128-54 22-24-62-18 288h-84l-18-288-24 62-54-22z%22 fill=%22%23272f3a%22/%3E%3Ccircle cx=%22240%22 cy=%22152%22 r=%2234%22 fill=%22%23e8f3ef%22/%3E%3Ctext x=%22240%22 y=%22572%22 text-anchor=%22middle%22 font-family=%22Arial%22 font-size=%2246%22 fill=%22%2320242a%22%3ELOOK B%3C/text%3E%3C/svg%3E';
     const editRows = [
       {
         order_id: 'edit-1001',
@@ -51,7 +53,7 @@
         plat_order_type: 11,
         shop_name: 'TEMU 女装一店',
         detail: [
-          { id: 'detail-1', sku: 'SKU-COTTON-001', skc: 'SKC-001', product_id: 'SPU-001', size: '通用尺码' }
+          { id: 'detail-1', sku: 'SKU-COTTON-001', skc: 'SKC-001', product_id: 'SPU-001', size: '通用尺码', image: fixtureImageA }
         ]
       },
       {
@@ -60,7 +62,7 @@
         plat_order_type: 12,
         shop_name: 'TEMU VMI 店铺',
         detail: [
-          { id: 'detail-2', sku: 'SKU-RAYON-002', skc: 'SKC-002', product_id: 'SPU-002', size: '人棉' }
+          { id: 'detail-2', sku: 'SKU-RAYON-002', skc: 'SKC-002', product_id: 'SPU-002', size: '人棉', pic: fixtureImageB }
         ]
       }
     ];
@@ -138,7 +140,8 @@
                   sku: 'SKU-MOVED-' + moved.order_id,
                   skc: 'SKC-001',
                   product_id: 'SPU-001',
-                  size: '通用尺码'
+                  size: '通用尺码',
+                  image: fixtureImageA
                 }
               ];
               paymentRows.push(moved);
@@ -262,6 +265,6 @@
       }
     }, 1200);
   </script>
-  <script src="../landwu-mobile-v2026.08.03.2.user.js"></script>
+  <script src="../landwu-mobile-v2026.08.09.2.user.js"></script>
 </body>
 </html>

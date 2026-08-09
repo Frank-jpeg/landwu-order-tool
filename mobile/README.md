@@ -7,7 +7,7 @@
 脚本地址：
 
 ```text
-https://raw.githubusercontent.com/Frank-jpeg/landwu-order-tool/codex/landwu-mobile/mobile/landwu-mobile-v2026.08.03.2.user.js
+https://raw.githubusercontent.com/Frank-jpeg/landwu-order-tool/codex/landwu-mobile/mobile/landwu-mobile-v2026.08.09.2.user.js
 ```
 
 安卓建议用支持 userscript 的浏览器安装脚本猫或 Tampermonkey。iPhone 可用支持 userscript 的 Safari 扩展。安装后，用同一个手机浏览器打开并登录 `https://user.landwu.com/`。
@@ -40,12 +40,13 @@ mobile/android/build/outputs/landwu-mobile-debug.apk
 - 一键预检并把全部待编辑 JIT 改为 TEMU 物流，随后等待订单进入待付款。
 - VMI 只显示，不参与改物流。
 - 待付款页按公开成分数据库匹配建议尺码。
+- 待付款 SKU 直接显示图片缩略图，点图可放大核对款式。
 - 一键修改全部匹配项，也可手动改为 `棉 / 涤纶 / 人棉 / 通用尺码`。
 - 批量任务实时显示当前订单、完成进度、成功和失败结果。
 - 提醒仍是“通用尺码”的 SKU。
 - 重新核对待付款 JIT 后执行支付预检，通过后可真实支付；VMI 始终跳过。
 
-当前版本不做图片下载或桌面端完整验图流程。
+当前版本只做在线看图，不做图片下载或桌面端完整验图流程。
 
 ## 成分数据库
 
