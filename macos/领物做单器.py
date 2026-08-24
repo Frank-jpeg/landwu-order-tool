@@ -131,6 +131,35 @@ DEFAULT_COMPOSITION_XLSX = ""
 COMPOSITION_DB_FOLDER = Path.home() / "Documents"
 COMPOSITION_DB_SUFFIXES = {".csv", ".xlsx", ".xlsm"}
 COMPOSITION_DB_JOIN_FIELDS = ("SKC_ID", "SPU_ID", "SKU")
+PRODUCT_NO_FIELD_ALIASES = (
+    "货号",
+    "款号",
+    "商品货号",
+    "product_no",
+    "productNo",
+    "product_sn",
+    "productSn",
+    "product_number",
+    "productNumber",
+    "product_code",
+    "productCode",
+    "goods_no",
+    "goodsNo",
+    "goods_sn",
+    "goodsSn",
+    "goods_code",
+    "goodsCode",
+    "style_no",
+    "styleNo",
+    "article_no",
+    "articleNo",
+    "item_no",
+    "itemNo",
+    "spu_code",
+    "spuCode",
+)
+PRODUCT_NO_POLYESTER_FALLBACK_START = (2026, 7, 1)
+PRODUCT_NO_POLYESTER_FALLBACK_START_TEXT = "2026-07-01"
 DEFAULT_AUTH_STATE_FILE = str(get_default_auth_state_file())
 AUTH_SYNC_PORTS = (18321, 18888)
 AUTH_SYNC_LISTEN_SECONDS = 180
@@ -161,7 +190,7 @@ LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
 # 一格滚轮对应的滚动像素；Text/Canvas 用像素滚动，避免整张卡片一次跳过去
 SCROLL_PIXELS_PER_UNIT = 60
-APP_VERSION = "2026.08.24.1"
+APP_VERSION = "2026.08.24.2"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "macos/领物做单器.py"
@@ -599,6 +628,50 @@ def infer_size_from_composition(value: Any) -> str:
     if "棉" in text or "cotton" in text:
         return "棉"
     return ""
+
+
+def get_product_no_from_sources(*sources: dict[str, Any]) -> str:
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in PRODUCT_NO_FIELD_ALIASES:
+            value = source.get(key)
+            if value not in (None, ""):
+                return str(value).strip()
+    return ""
+
+
+def parse_product_no_upload_date(value: Any) -> tuple[str, tuple[int, int, int]] | None:
+    text = str(value or "")
+    for match in re.finditer(r"20\d{6}", text):
+        token = match.group(0)
+        try:
+            parsed = time.strptime(token, "%Y%m%d")
+        except ValueError:
+            continue
+        date_tuple = (parsed.tm_year, parsed.tm_mon, parsed.tm_mday)
+        date_text = f"{parsed.tm_year:04d}-{parsed.tm_mon:02d}-{parsed.tm_mday:02d}"
+        return date_text, date_tuple
+    return None
+
+
+def infer_polyester_fallback_from_product_no(value: Any) -> dict[str, str] | None:
+    product_no = str(value or "").strip()
+    parsed = parse_product_no_upload_date(product_no)
+    if not product_no or not parsed:
+        return None
+    date_text, date_tuple = parsed
+    if date_tuple < PRODUCT_NO_POLYESTER_FALLBACK_START:
+        return None
+    return {
+        "query": product_no,
+        "composition": f"货号 {product_no} 日期 {date_text} >= {PRODUCT_NO_POLYESTER_FALLBACK_START_TEXT}，默认涤纶",
+        "target_size": "涤纶",
+        "db_field": "货号日期兜底",
+        "db_file": "",
+        "product_no": product_no,
+        "product_no_date": date_text,
+    }
 
 
 def load_composition_xlsx(path_text: str) -> dict[str, Any]:
@@ -4347,6 +4420,7 @@ class LandwuGuiApp:
                     detail,
                     ("product_id", "productId", "spu_id", "spuId", "goods_id", "goodsId", "design_product_id"),
                 ) or first_value(row, ("product_id", "productId", "spu_id", "spuId", "goods_id", "goodsId"))
+                product_no = get_product_no_from_sources(detail, row)
                 match_candidates = []
                 for value in (skc_id, product_id, sku):
                     if value and value not in match_candidates:
@@ -4364,6 +4438,7 @@ class LandwuGuiApp:
                         "sku": sku,
                         "skc_id": skc_id,
                         "product_id": product_id,
+                        "product_no": product_no,
                         "match_candidates": match_candidates,
                         "order_detail_id": str(order_detail_id),
                         "current_size": current_size,
@@ -4588,6 +4663,7 @@ class LandwuGuiApp:
         no_target = 0
         no_sku = 0
         same = 0
+        fallback_count = 0
         targets: list[dict[str, Any]] = []
         result_by_detail_id: dict[str, dict[str, Any]] = {}
 
@@ -4606,9 +4682,13 @@ class LandwuGuiApp:
                     record = mapping[key]
                     break
             if not record:
-                no_sku += 1
-                result_by_detail_id[detail_id] = result
-                continue
+                record = infer_polyester_fallback_from_product_no(item.get("product_no"))
+                if record:
+                    fallback_count += 1
+                else:
+                    no_sku += 1
+                    result_by_detail_id[detail_id] = result
+                    continue
 
             matched += 1
             composition = str(record.get("composition") or "")
@@ -4644,6 +4724,7 @@ class LandwuGuiApp:
             "same": same,
             "noSku": no_sku,
             "noTarget": no_target,
+            "fallbackCount": fallback_count,
             "dbFileCount": payload.get("dbFileCount") or 0,
             "skippedFiles": payload.get("skippedFiles") or [],
             "dbFolder": str(db_folder),
@@ -4656,6 +4737,9 @@ class LandwuGuiApp:
             f"相同 {payload.get('same') or 0}，未匹配 {payload.get('noSku') or 0}，"
             f"无法识别 {payload.get('noTarget') or 0}；读取 {payload.get('dbFileCount') or 0} 个文件"
         )
+        fallback_count = int(payload.get("fallbackCount") or 0)
+        if fallback_count:
+            message += f"，货号兜底 {fallback_count}"
         skipped = payload.get("skippedFiles") or []
         if skipped:
             message += f"，跳过 {len(skipped)} 个文件"
