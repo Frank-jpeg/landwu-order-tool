@@ -151,7 +151,7 @@ LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
 # 触控板精密滚动累计多少像素算一格滚轮
 SCROLL_PIXELS_PER_UNIT = 60
-APP_VERSION = "2026.08.01.11"
+APP_VERSION = "2026.08.24.1"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "领物做单器.pyw"
@@ -2465,7 +2465,7 @@ class LandwuGuiApp:
 
         action_frame = ttk.Frame(self.root, style="Toolbar.TFrame", padding=(10, 7))
         action_frame.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 4))
-        action_frame.columnconfigure(9, weight=1)
+        action_frame.columnconfigure(10, weight=1)
         ttk.Label(action_frame, textvariable=self.toolbar_title_var, style="ToolbarTitle.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
 
         self.toolbar_widgets_by_status: dict[int, list[tk.Widget]] = {1: [], 2: [], 3: []}
@@ -2481,9 +2481,12 @@ class LandwuGuiApp:
         self.toolbar_widgets_by_status[2].append(
             self._add_button(action_frame, 0, 2, "修改成分尺码", self.open_payment_size_editor, style="Ghost.TButton")
         )
+        self.toolbar_widgets_by_status[2].append(
+            self._add_button(action_frame, 0, 3, "一键匹配并提交成分", self.quick_match_submit_payment_sizes, style="Match.TButton")
+        )
 
         payment_bulk = ttk.Frame(action_frame, style="Toolbar.TFrame")
-        payment_bulk.grid(row=0, column=3, columnspan=6, sticky="ew", padx=(10, 0))
+        payment_bulk.grid(row=0, column=4, columnspan=6, sticky="ew", padx=(10, 0))
         payment_bulk.columnconfigure(1, weight=1)
         ttk.Label(payment_bulk, text="取消勾选订单号", background="#FFFFFF", foreground="#52606D").grid(row=0, column=0, sticky="w")
         ttk.Entry(payment_bulk, textvariable=self.bulk_uncheck_order_nos_var, width=34).grid(row=0, column=1, sticky="ew", padx=(6, 4))
@@ -4325,6 +4328,95 @@ class LandwuGuiApp:
             return
         self._apply_db_composition_to_size_views(views, status_var, db_folder)
 
+    def _match_payment_size_items_with_db(self, items: list[dict[str, Any]], db_folder: Path) -> dict[str, Any]:
+        query_values: list[str] = []
+        for item in items:
+            candidates = item.get("match_candidates") or [item.get("sku")]
+            for value in candidates:
+                key = normalize_db_key(value)
+                if key:
+                    query_values.append(key)
+
+        payload = load_composition_db_mapping(query_values, db_folder=db_folder)
+        mapping = payload["mapping"]
+        matched = 0
+        changed = 0
+        no_target = 0
+        no_sku = 0
+        same = 0
+        targets: list[dict[str, Any]] = []
+        result_by_detail_id: dict[str, dict[str, Any]] = {}
+
+        for item in items:
+            detail_id = str(item.get("order_detail_id") or "")
+            result = {
+                "composition": "",
+                "target_size": "",
+                "note": "未匹配",
+                "checked": False,
+            }
+            record = None
+            for value in item.get("match_candidates") or [item.get("sku")]:
+                key = normalize_db_key(value)
+                if key and key in mapping:
+                    record = mapping[key]
+                    break
+            if not record:
+                no_sku += 1
+                result_by_detail_id[detail_id] = result
+                continue
+
+            matched += 1
+            composition = str(record.get("composition") or "")
+            target = str(record.get("target_size") or "")
+            current = str(item.get("current_size") or "").strip()
+            result["composition"] = composition
+            result["target_size"] = target
+            if not target:
+                result["note"] = "无法识别"
+                no_target += 1
+            elif target == current:
+                result["note"] = "相同跳过"
+                same += 1
+            else:
+                result["note"] = str(record.get("db_field") or "已匹配")
+                result["checked"] = True
+                targets.append(
+                    {
+                        "order_no": item.get("order_no"),
+                        "sku": item.get("sku"),
+                        "order_detail_id": item.get("order_detail_id"),
+                        "target_size": target,
+                    }
+                )
+                changed += 1
+            result_by_detail_id[detail_id] = result
+
+        return {
+            "targets": targets,
+            "resultByDetailId": result_by_detail_id,
+            "matched": matched,
+            "changed": changed,
+            "same": same,
+            "noSku": no_sku,
+            "noTarget": no_target,
+            "dbFileCount": payload.get("dbFileCount") or 0,
+            "skippedFiles": payload.get("skippedFiles") or [],
+            "dbFolder": str(db_folder),
+        }
+
+    @staticmethod
+    def _format_payment_size_match_message(payload: dict[str, Any]) -> str:
+        message = (
+            f"成分数据库匹配完成：匹配 {payload.get('matched') or 0}，可修改 {payload.get('changed') or 0}，"
+            f"相同 {payload.get('same') or 0}，未匹配 {payload.get('noSku') or 0}，"
+            f"无法识别 {payload.get('noTarget') or 0}；读取 {payload.get('dbFileCount') or 0} 个文件"
+        )
+        skipped = payload.get("skippedFiles") or []
+        if skipped:
+            message += f"，跳过 {len(skipped)} 个文件"
+        return message
+
     def _mark_size_view_after_manual_edit(self, view: dict[str, Any]) -> None:
         target = str(view["target"].get() or "").strip()
         current = str((view.get("item") or {}).get("current_size") or "").strip()
@@ -4396,77 +4488,98 @@ class LandwuGuiApp:
         status_var: tk.StringVar,
         db_folder: Path,
     ) -> None:
-        query_values: list[str] = []
-        for view in views:
-            item = view["item"]
-            candidates = item.get("match_candidates") or [item.get("sku")]
-            for value in candidates:
-                key = normalize_db_key(value)
-                if key:
-                    query_values.append(key)
         try:
             status_var.set(f"正在读取数据库：{db_folder}")
             self.root.update_idletasks()
-            payload = load_composition_db_mapping(query_values, db_folder=db_folder)
+            payload = self._match_payment_size_items_with_db([view["item"] for view in views], db_folder)
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("成分数据库匹配", str(exc))
             return
 
-        mapping = payload["mapping"]
-        matched = 0
-        changed = 0
-        no_target = 0
-        no_sku = 0
-        same = 0
+        result_by_detail_id = payload.get("resultByDetailId") or {}
         for view in views:
             item = view["item"]
-            record = None
-            for value in item.get("match_candidates") or [item.get("sku")]:
-                key = normalize_db_key(value)
-                if key and key in mapping:
-                    record = mapping[key]
-                    break
-            if not record:
-                view["composition"].set("")
-                view["target"].set("")
-                view["checked"].set(False)
-                view["note"].set("未匹配")
-                no_sku += 1
-                continue
+            result = result_by_detail_id.get(str(item.get("order_detail_id") or "")) or {}
+            view["composition"].set(str(result.get("composition") or ""))
+            view["target"].set(str(result.get("target_size") or ""))
+            view["checked"].set(bool(result.get("checked")))
+            view["note"].set(str(result.get("note") or "未匹配"))
 
-            matched += 1
-            composition = str(record.get("composition") or "")
-            target = str(record.get("target_size") or "")
-            current = str(item.get("current_size") or "").strip()
-            view["composition"].set(composition)
-            view["target"].set(target)
-            if not target:
-                view["checked"].set(False)
-                view["note"].set("无法识别")
-                no_target += 1
-            elif target == current:
-                view["checked"].set(False)
-                view["note"].set("相同跳过")
-                same += 1
-            else:
-                view["checked"].set(True)
-                view["note"].set(str(record.get("db_field") or "已匹配"))
-                changed += 1
-
-        skipped = payload.get("skippedFiles") or []
-        message = (
-            f"成分数据库匹配完成：匹配 {matched}，可修改 {changed}，相同 {same}，"
-            f"未匹配 {no_sku}，无法识别 {no_target}；读取 {payload.get('dbFileCount') or 0} 个文件"
-        )
-        if skipped:
-            message += f"，跳过 {len(skipped)} 个文件"
-        status_var.set(message)
+        status_var.set(self._format_payment_size_match_message(payload))
 
     def _set_size_views_checked(self, views: list[dict[str, Any]], checked: bool) -> None:
         for view in views:
             target = str(view["target"].get() or "").strip()
             current = str((view.get("item") or {}).get("current_size") or "").strip()
             view["checked"].set(bool(checked and target and target != current))
+
+    def _submit_payment_size_targets(
+        self,
+        targets: list[dict[str, Any]],
+        *,
+        status_var: tk.StringVar | None = None,
+        submit_button: ttk.Button | None = None,
+        button_text: str = "提交勾选修改",
+        progress_window: tk.Toplevel | None = None,
+        close_editor_on_success: bool = False,
+        title: str = "修改待付款订单成分尺码",
+    ) -> None:
+        if self.busy:
+            messagebox.showinfo("请稍候", "当前已有任务执行中。")
+            return
+
+        pending_message = f"正在提交 {len(targets)} 个 SKU，请稍候..."
+        self.status_var.set(pending_message)
+        if status_var is not None:
+            status_var.set(pending_message)
+        if submit_button is not None:
+            submit_button.configure(text="正在提交...", state="disabled")
+        if progress_window is not None:
+            try:
+                progress_window.update_idletasks()
+            except Exception:
+                pass
+
+        def task():
+            return with_landwu_session(
+                self._make_runtime_args(),
+                lambda _session, client: client.change_order_detail_sizes(targets, relation_type=1),
+            )
+
+        def on_success(payload: dict[str, Any]) -> None:
+            failed = payload.get("failed") or []
+            message = payload.get("message") or "尺码修改完成"
+            done_message = (
+                f"尺码修改完成：失败 {len(failed)} / 共 {len(targets)} 个，请查看弹窗。"
+                if failed
+                else f"尺码修改完成：成功 {len(targets)} 个，正在刷新订单..."
+            )
+            self.status_var.set(done_message)
+            if status_var is not None:
+                status_var.set(done_message)
+            if failed and submit_button is not None:
+                submit_button.configure(text=button_text, state="normal")
+            if failed:
+                message += "\n失败示例：" + "；".join(
+                    f"{item.get('orderNo')} {item.get('sku')}：{item.get('error')}" for item in failed[:3]
+                )
+            messagebox.showinfo("尺码修改", message)
+            if not failed and close_editor_on_success:
+                self._close_size_editor_window()
+            self.refresh_summary()
+
+        def on_error(error: str) -> None:
+            brief = str(error).replace("\r", " ").replace("\n", " ").strip()
+            if len(brief) > 80:
+                brief = brief[:77] + "..."
+            error_message = f"尺码修改失败：{brief}" if brief else "尺码修改失败"
+            self.status_var.set(error_message)
+            if status_var is not None:
+                status_var.set(error_message)
+            if submit_button is not None:
+                submit_button.configure(text=button_text, state="normal")
+
+        self._run_task(title, task, on_success=on_success, on_error=on_error)
 
     def _submit_payment_size_changes(
         self,
@@ -4517,61 +4630,56 @@ class LandwuGuiApp:
             ),
         ):
             return
-        if self.busy:
-            messagebox.showinfo("请稍候", "当前已有任务执行中。")
+
+        self._submit_payment_size_targets(
+            targets,
+            status_var=status_var,
+            submit_button=submit_button,
+            progress_window=window,
+            close_editor_on_success=True,
+        )
+
+    def quick_match_submit_payment_sizes(self) -> None:
+        if self._active_status() != 2:
+            try:
+                self.notebook.select(1)
+            except Exception:
+                pass
+        items = self._build_payment_size_items()
+        if not items:
+            messagebox.showinfo("一键匹配并提交成分", "当前没有待付款订单。请先刷新订单。")
             return
 
-        pending_message = f"正在提交 {len(targets)} 个 SKU，请稍候..."
-        self.status_var.set(pending_message)
-        if status_var is not None:
-            status_var.set(pending_message)
-        if submit_button is not None:
-            submit_button.configure(text="正在提交...", state="disabled")
-        try:
-            window.update_idletasks()
-        except Exception:
-            pass
+        db_folder = self._get_composition_db_folder()
 
         def task():
-            return with_landwu_session(
-                self._make_runtime_args(),
-                lambda _session, client: client.change_order_detail_sizes(targets, relation_type=1),
-            )
+            return self._match_payment_size_items_with_db(items, db_folder)
 
-        def on_success(payload: dict[str, Any]) -> None:
-            failed = payload.get("failed") or []
-            message = payload.get("message") or "尺码修改完成"
-            done_message = (
-                f"尺码修改完成：失败 {len(failed)} / 共 {len(targets)} 个，请查看弹窗。"
-                if failed
-                else f"尺码修改完成：成功 {len(targets)} 个，正在刷新订单..."
-            )
-            self.status_var.set(done_message)
-            if status_var is not None:
-                status_var.set(done_message)
-            if failed and submit_button is not None:
-                submit_button.configure(text="提交勾选修改", state="normal")
-            if failed:
-                message += "\n失败示例：" + "；".join(
-                    f"{item.get('orderNo')} {item.get('sku')}：{item.get('error')}" for item in failed[:3]
-                )
-            messagebox.showinfo("尺码修改", message)
-            if not failed:
-                self._close_size_editor_window()
-            self.refresh_summary()
+        def on_match_success(payload: dict[str, Any]) -> None:
+            message = self._format_payment_size_match_message(payload)
+            self.status_var.set(message)
+            targets = payload.get("targets") or []
+            if not targets:
+                messagebox.showinfo("一键匹配并提交成分", message + "\n\n没有可提交的尺码修改。")
+                return
+            order_nos = [str(item.get("order_no") or "") for item in targets]
+            if not messagebox.askyesno(
+                "确认提交成分尺码",
+                "\n".join(
+                    [
+                        message,
+                        f"将按“全部关联”提交 {len(targets)} 个待付款 SKU。",
+                        f"涉及订单：{self._format_order_no_preview(order_nos)}",
+                        f"数据库目录：{db_folder}",
+                        "",
+                        "确定提交吗？",
+                    ]
+                ),
+            ):
+                return
+            self._submit_payment_size_targets(targets, title="一键提交成分尺码")
 
-        def on_error(error: str) -> None:
-            brief = str(error).replace("\r", " ").replace("\n", " ").strip()
-            if len(brief) > 80:
-                brief = brief[:77] + "..."
-            error_message = f"尺码修改失败：{brief}" if brief else "尺码修改失败"
-            self.status_var.set(error_message)
-            if status_var is not None:
-                status_var.set(error_message)
-            if submit_button is not None:
-                submit_button.configure(text="提交勾选修改", state="normal")
-
-        self._run_task("修改待付款订单成分尺码", task, on_success=on_success, on_error=on_error)
+        self._run_task("一键匹配成分数据库", task, on_success=on_match_success)
 
     def _active_status(self) -> int:
         try:
@@ -4647,7 +4755,7 @@ class LandwuGuiApp:
                 continue
             skus = self._generic_size_skus_from_payment_row(row)
             if skus:
-                orders.append({"order_no": str(row.get("order_no") or ""), "skus": skus})
+                orders.append({"order_id": order_id, "order_no": str(row.get("order_no") or ""), "skus": skus})
         return orders
 
     def get_payment_counts(self) -> dict[str, int]:
@@ -4670,14 +4778,14 @@ class LandwuGuiApp:
         counts: dict[str, int],
         selected_order_nos: list[str],
         generic_size_orders: list[dict[str, Any]],
-    ) -> bool:
+    ) -> str | None:
         message_lines = [
             f"待付款 JIT 共 {counts['jitTotal']} 单。",
             f"当前勾选 {counts['checked']} 单，取消勾选 {counts['unchecked']} 单。",
             f"将先预检，预检通过后真实支付：{self._format_order_no_preview(selected_order_nos)}",
         ]
         if not generic_size_orders:
-            return messagebox.askyesno("确认支付", "\n".join([*message_lines, "", "确认图片无误，并继续吗？"]))
+            return "all" if messagebox.askyesno("确认支付", "\n".join([*message_lines, "", "确认图片无误，并继续吗？"])) else None
 
         warning_orders: list[str] = []
         for item in generic_size_orders:
@@ -4688,15 +4796,16 @@ class LandwuGuiApp:
                 sku_text += "…"
             warning_orders.append(f"{order_no}（{sku_text}）" if sku_text else order_no)
 
-        result = {"confirmed": False}
+        safe_count = max(0, counts["checked"] - len(generic_size_orders))
+        result: dict[str, str | None] = {"action": None}
         dialog = tk.Toplevel(self.root)
         dialog.title("确认支付")
         dialog.configure(background="#FFFFFF")
         dialog.resizable(False, False)
         dialog.transient(self.root)
 
-        def close(confirmed: bool = False) -> None:
-            result["confirmed"] = confirmed
+        def close(action: str | None = None) -> None:
+            result["action"] = action
             try:
                 dialog.grab_release()
             except Exception:
@@ -4722,7 +4831,7 @@ class LandwuGuiApp:
         warning_frame.pack(fill="x", pady=(14, 0))
         tk.Label(
             warning_frame,
-            text="有未改成分尺码的订单，确认付款吗？",
+            text="有未改成分尺码（通用尺码）的订单，确认付款吗？",
             justify="left",
             anchor="w",
             bg="#FEF2F2",
@@ -4740,12 +4849,26 @@ class LandwuGuiApp:
             font=("Microsoft YaHei UI", 9),
         ).pack(fill="x", anchor="w", pady=(6, 0))
 
-        tk.Label(body, text="请确认图片和尺码无误后再继续。", bg="#FFFFFF", fg="#52606D").pack(anchor="w", pady=(14, 0))
+        tk.Label(
+            body,
+            text=f"可选择只支付已改好尺码的 {safe_count} 单，以上通用尺码订单会自动跳过。",
+            bg="#FFFFFF",
+            fg="#52606D",
+        ).pack(anchor="w", pady=(14, 0))
         buttons = ttk.Frame(body)
         buttons.pack(fill="x", pady=(18, 0))
         cancel_button = ttk.Button(buttons, text="取消", command=close)
         cancel_button.pack(side="right")
-        ttk.Button(buttons, text="仍要付款", command=lambda: close(True), style="Danger.TButton").pack(side="right", padx=(0, 8))
+        ttk.Button(buttons, text="仍要付款全部", command=lambda: close("all"), style="Danger.TButton").pack(side="right", padx=(0, 8))
+        safe_button = ttk.Button(
+            buttons,
+            text=f"只支付已改好尺码（{safe_count}单）",
+            command=lambda: close("safe_only"),
+            style="Accent.TButton",
+        )
+        if safe_count <= 0:
+            safe_button.configure(state="disabled")
+        safe_button.pack(side="right", padx=(0, 8))
 
         dialog.update_idletasks()
         x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - dialog.winfo_width()) // 2)
@@ -4754,7 +4877,7 @@ class LandwuGuiApp:
         dialog.grab_set()
         cancel_button.focus_set()
         self.root.wait_window(dialog)
-        return bool(result["confirmed"])
+        return result["action"]
 
     def _format_order_no_preview(self, order_nos: Iterable[str], limit: int = 8) -> str:
         values = [str(item) for item in order_nos if str(item)]
@@ -4958,8 +5081,16 @@ class LandwuGuiApp:
             return
         counts = self.get_payment_counts()
         generic_size_orders = self.get_checked_payment_generic_size_orders()
-        if not self._confirm_payment_with_size_warning(counts, selected_order_nos, generic_size_orders):
+        payment_action = self._confirm_payment_with_size_warning(counts, selected_order_nos, generic_size_orders)
+        if not payment_action:
             return
+        if payment_action == "safe_only":
+            generic_order_ids = {str(item.get("order_id") or "") for item in generic_size_orders if item.get("order_id")}
+            selected_ids = [order_id for order_id in selected_ids if order_id not in generic_order_ids]
+            if not selected_ids:
+                messagebox.showinfo("确认支付", "没有可支付的已改好尺码订单。请先修改通用尺码。")
+                return
+            self._log(f"支付跳过通用尺码订单：{len(generic_order_ids)} 单")
 
         def task():
             def worker(_session, client: LandwuClient) -> dict[str, Any]:
