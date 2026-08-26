@@ -15,3 +15,7 @@ __pycache__/
 *.log
 *.bak-*
 .venv/
+
+# Android 本机构建产物和本地签名
+mobile/android/build/
+mobile/android/*.keystore
