@@ -60,6 +60,8 @@ macOS 将登录态和本地设置保存在 `~/Library/Application Support/领物
 
 发现新版本并确认后，工具会覆盖当前运行的源码文件并自动重启。macOS 仅修改业务源码时无需重新打包 `.app`；修改启动器、Python 版本、依赖、图标或应用结构时才需要重新打包。
 
+版本号规则：Windows 和 macOS 的 `APP_VERSION` 必须保持一致。每次发布用户可见的功能或修复时递增版本号（例如 `2026.09.03.1`、`2026.09.03.2`），这样“检查更新”中的当前版本和最新版本才准确。
+
 macOS 的成分尺码编辑器支持选择 Excel 成分表，也支持选择本地成分数据库文件夹；不依赖 Windows 的 `D:` 路径。
 
 手机版 APK 的源码、构建脚本和手机数据库在 `codex/landwu-mobile` 分支的 `mobile/` 目录。APK 构建产物在 `mobile/android/build/outputs/`，本地签名文件为 `mobile/android/landwu-mobile-debug.keystore`；签名不同会导致安卓无法覆盖安装。该签名文件不提交仓库，当前备份在 `D:\临时备份\landwu-mobile-signing\`。
