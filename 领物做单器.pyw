@@ -182,7 +182,7 @@ LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
 # 触控板精密滚动累计多少像素算一格滚轮
 SCROLL_PIXELS_PER_UNIT = 60
-APP_VERSION = "2026.09.03.3"
+APP_VERSION = "2026.09.03.4"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "领物做单器.pyw"
@@ -2580,7 +2580,7 @@ def build_runtime_args(
 class LandwuGuiApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Landwu 做单助手 Pro")
+        self.root.title(f"Landwu 做单助手 Pro v{APP_VERSION}")
         self.root.geometry("1180x720")
         self.root.minsize(1000, 600)
 
@@ -2677,6 +2677,7 @@ class LandwuGuiApp:
         self.style.configure("Status.TFrame", background="#17212B")
         self.style.configure("TLabel", background="#FFFFFF", foreground="#1F2933")
         self.style.configure("AppTitle.TLabel", background="#FFFFFF", foreground="#102A43", font=("Microsoft YaHei UI", 13, "bold"))
+        self.style.configure("Version.TLabel", background="#FFFFFF", foreground="#7B8794", font=("Segoe UI", 8))
         self.style.configure("Summary.TLabel", background="#FFFFFF", foreground="#52606D", font=("Microsoft YaHei UI", 9))
         self.style.configure("BalanceTitle.TLabel", background="#F0F9FF", foreground="#64748B", font=("Microsoft YaHei UI", 8))
         self.style.configure("BalanceValue.TLabel", background="#F0F9FF", foreground="#0369A1", font=("Segoe UI", 13, "bold"))
@@ -2740,7 +2741,10 @@ class LandwuGuiApp:
         header = ttk.Frame(self.root, style="Surface.TFrame", padding=(10, 8))
         header.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
         header.columnconfigure(1, weight=1)
-        ttk.Label(header, text="Landwu 做单助手", style="AppTitle.TLabel").grid(row=0, column=0, sticky="w")
+        title_frame = ttk.Frame(header, style="Surface.TFrame")
+        title_frame.grid(row=0, column=0, sticky="w")
+        ttk.Label(title_frame, text="Landwu 做单助手", style="AppTitle.TLabel").pack(side="left")
+        ttk.Label(title_frame, text=f"v{APP_VERSION}", style="Version.TLabel").pack(side="left", padx=(8, 0))
         ttk.Label(header, textvariable=self.summary_line_var, style="Summary.TLabel").grid(row=0, column=1, sticky="w", padx=(16, 8))
         refresh_btn = ttk.Button(header, text="刷新订单", command=self.refresh_summary, style="Accent.TButton")
         self.waybill_failed_card = tk.Frame(header, bg="#F8FAFC", highlightbackground="#CBD5E1", highlightthickness=1, padx=10, pady=3)
