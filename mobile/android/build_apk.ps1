@@ -5,7 +5,7 @@ $OutputEncoding = [System.Text.UTF8Encoding]::new()
 
 $ProjectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoMobileDir = Split-Path -Parent $ProjectDir
-$ScriptSource = Join-Path $RepoMobileDir "landwu-mobile-v2026.09.03.3.user.js"
+$ScriptSource = Join-Path $RepoMobileDir "landwu-mobile-v2026.09.03.4.user.js"
 $SdkRoot = $env:ANDROID_SDK_ROOT
 if (-not $SdkRoot) { $SdkRoot = $env:ANDROID_HOME }
 if (-not $SdkRoot) { $SdkRoot = "G:\Android\Sdk" }

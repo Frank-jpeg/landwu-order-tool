@@ -1,19 +1,19 @@
 // ==UserScript==
 // @name         Landwu 手机做单工作台
 // @namespace    https://user.landwu.com/
-// @version      2026.09.03.3
+// @version      2026.09.03.4
 // @description  手机端独立处理 JIT 物流、看图、成分尺码与支付。
 // @match        https://user.landwu.com/*
 // @grant        none
 // @run-at       document-idle
-// @updateURL    https://raw.githubusercontent.com/Frank-jpeg/landwu-order-tool/codex/landwu-mobile/mobile/landwu-mobile-v2026.09.03.3.user.js
-// @downloadURL  https://raw.githubusercontent.com/Frank-jpeg/landwu-order-tool/codex/landwu-mobile/mobile/landwu-mobile-v2026.09.03.3.user.js
+// @updateURL    https://raw.githubusercontent.com/Frank-jpeg/landwu-order-tool/codex/landwu-mobile/mobile/landwu-mobile-v2026.09.03.4.user.js
+// @downloadURL  https://raw.githubusercontent.com/Frank-jpeg/landwu-order-tool/codex/landwu-mobile/mobile/landwu-mobile-v2026.09.03.4.user.js
 // ==/UserScript==
 
 (function () {
   'use strict';
 
-  var SCRIPT_VERSION = '2026.09.03.3';
+  var SCRIPT_VERSION = '2026.09.03.4';
   var ROOT_ID = 'landwu-mobile-workbench-v2';
   var STYLE_ID = ROOT_ID + '-style';
   var CONFIRM_ID = ROOT_ID + '-confirm';
