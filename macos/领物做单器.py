@@ -673,8 +673,8 @@ def iter_named_options(options: Any) -> Iterable[tuple[str, Any]]:
         for key, option in options.items():
             yield _option_id_from_value(option, key), option
     elif isinstance(options, list):
-        for index, option in enumerate(options):
-            yield _option_id_from_value(option, index), option
+        for option in options:
+            yield _option_id_from_value(option), option
 
 
 def find_named_option(options: Any, target: str) -> dict[str, Any]:
