@@ -24,3 +24,6 @@ mobile/android/*.keystore
 build/
 dist/
 *.spec
+
+# 临时表格合并目录
+_tmp_merge/
