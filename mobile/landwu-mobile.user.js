@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Landwu 手机版做单器
 // @namespace    https://user.landwu.com/
-// @version      2026.08.03.1
+// @version      2026.09.03.1
 // @description  手机端在 Landwu 页面内处理待付款订单尺码/成分修改。
 // @match        https://user.landwu.com/*
 // @grant        none
@@ -16,7 +16,7 @@
   if (window.__LANDWU_MOBILE_ORDER_TOOL_LOADED__) return;
   window.__LANDWU_MOBILE_ORDER_TOOL_LOADED__ = true;
 
-  const SCRIPT_VERSION = '2026.08.03.1';
+  const SCRIPT_VERSION = '2026.09.03.1';
   const PANEL_ID = 'landwu-mobile-order-tool';
   const STYLE_ID = `${PANEL_ID}-style`;
   const STORAGE_PREFIX = 'landwu-mobile-order-tool';
@@ -25,7 +25,7 @@
   const DEFAULT_DB_URL =
     'https://raw.githubusercontent.com/Frank-jpeg/landwu-order-tool/codex/landwu-mobile/mobile/composition-db.json';
   const SIZE_TARGETS = ['棉', '涤纶', '人棉', '通用尺码'];
-  const JOIN_FIELDS = ['SKC_ID', 'SPU_ID', 'SKU'];
+  const JOIN_FIELDS = ['SKU_ID', 'SKU', 'SKC_ID', 'SPU_ID'];
 
   const state = {
     collapsed: loadCollapsedPreference(),
@@ -198,16 +198,17 @@
       for (const detail of details) {
         if (!detail || typeof detail !== 'object') continue;
         const orderDetailId = firstNonEmpty(detail, ['id', 'order_detail_id', 'item_id']);
-        const sku = firstNonEmpty(detail, ['sku', 'productSku', 'product_sku', 'product_sku_id', 'goods_sku']);
+        const sku = firstNonEmpty(detail, ['sku', 'sku_id', 'skuId', 'sku_code', 'skuCode', 'productSku', 'product_sku', 'product_sku_id', 'goods_sku']);
         if (!orderDetailId || !sku) continue;
         const skcId = firstNonEmpty(detail, ['skc', 'SKC', 'skc_id', 'skcId', 'product_skc_id', 'productSkcId']);
         const spuId =
           firstNonEmpty(detail, ['product_id', 'productId', 'spu_id', 'spuId', 'goods_id', 'goodsId', 'design_product_id']) ||
           firstNonEmpty(row, ['product_id', 'productId', 'spu_id', 'spuId', 'goods_id', 'goodsId']);
         const matchCandidates = [
+          ['SKU_ID', sku],
+          ['SKU', sku],
           ['SKC_ID', skcId],
           ['SPU_ID', spuId],
-          ['SKU', sku],
         ].filter(([, value]) => value);
         items.push({
           key: String(orderDetailId),
@@ -257,6 +258,7 @@
     return {
       SKC_ID: normalizeDbKey(readRecordValue(record, ['SKC_ID', 'skc_id', 'skcId', 'skc'])),
       SPU_ID: normalizeDbKey(readRecordValue(record, ['SPU_ID', 'spu_id', 'spuId', 'product_id', 'productId'])),
+      SKU_ID: normalizeDbKey(readRecordValue(record, ['SKU_ID', 'SKU ID', 'sku_id', 'skuId', 'skuCode', 'sku_code'])),
       SKU: normalizeDbKey(readRecordValue(record, ['SKU', 'sku', 'productSku', 'product_sku'])),
       composition,
       target_size: targetSize,

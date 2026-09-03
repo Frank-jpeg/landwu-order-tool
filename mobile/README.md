@@ -72,7 +72,7 @@ https://raw.githubusercontent.com/Frank-jpeg/landwu-order-tool/codex/landwu-mobi
 ]
 ```
 
-匹配优先级为 `SKC_ID -> SPU_ID -> SKU`。如果 `target_size` 为空，脚本会根据 `composition` 推断：优先 `人棉`，再 `涤纶/聚酯/polyester`，再 `棉`。
+匹配优先级为 `SKU_ID -> SKU -> SKC_ID -> SPU_ID`。如果 `target_size` 为空，脚本会根据 `composition` 推断：优先 `人棉`，再 `涤纶/聚酯/polyester`，再 `棉`。
 
 数据库没有匹配到时，会从货号、款号等字段中提取合法的 `YYYYMMDD` 日期；日期大于等于 `2026-07-01` 的商品自动建议为 `涤纶`。数据库匹配优先于这条兜底规则。
 

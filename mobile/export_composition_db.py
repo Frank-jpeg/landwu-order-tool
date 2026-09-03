@@ -35,7 +35,7 @@ def normalize_db_key(value: Any) -> str:
 
 
 def normalize_header(value: Any) -> str:
-    return re.sub(r"\s+", "", str(value or "").strip().lower())
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", str(value or "").strip().lower())
 
 
 def normalize_composition_text(value: Any) -> str:
@@ -127,8 +127,8 @@ def export_records(source_dir: Path) -> tuple[list[dict[str, str]], dict[str, An
             skipped.append(path.name)
             continue
         spu_col = find_col(headers, "SPU_ID", "spu_id", "spuId", "product_id", "productId")
-        skc_col = find_col(headers, "SKC_ID", "skc_id", "skcId", "skc")
-        sku_col = find_col(headers, "SKU", "sku", "productSku", "product_sku")
+        skc_col = find_col(headers, "SKC_ID", "SKC ID", "skc_id", "skcId", "skc")
+        sku_col = find_col(headers, "SKU_ID", "SKU ID", "sku_id", "skuId", "SKU", "sku", "productSku", "product_sku")
         composition_col = find_col(headers, "成分", "成份")
         material_col = find_col(headers, "材质")
         if composition_col < 0 and material_col < 0:
@@ -151,6 +151,7 @@ def export_records(source_dir: Path) -> tuple[list[dict[str, str]], dict[str, An
                 {
                     "SKC_ID": skc_id,
                     "SPU_ID": spu_id,
+                    "SKU_ID": sku,
                     "SKU": sku,
                     "composition": composition,
                     "target_size": target_size,
