@@ -19,3 +19,8 @@ __pycache__/
 # Android 本机构建产物和本地签名
 mobile/android/build/
 mobile/android/*.keystore
+
+# Windows 本机构建产物
+build/
+dist/
+*.spec
