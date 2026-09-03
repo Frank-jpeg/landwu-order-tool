@@ -2,6 +2,12 @@
 
 Landwu 本地做单桌面工具，提供订单查询、JIT 物流处理、图片下载、尺码调整、支付预检，以及登录态同步。
 
+## 下载 Windows 版
+
+[下载最新 Windows EXE](https://github.com/Frank-jpeg/landwu-order-tool/releases/latest)
+
+打开页面后，在 **Assets** 区域下载 `领物做单器.exe`。每次发布新版本后，这个链接会自动指向最新版本。
+
 ## 分支说明
 
 `main` 是 Windows/macOS 桌面版主线，`codex/landwu-mobile` 是手机版 APK / userscript 分支。同一个本地文件夹同一时间只会展开一个分支的文件；切到手机分支时看到桌面代码缺少主线新按钮，不代表主线丢失。
