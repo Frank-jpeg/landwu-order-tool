@@ -119,7 +119,9 @@ DEFAULT_DEBUG_PORT = 18800
 DEFAULT_COMPOSITION_XLSX = r"C:\Users\Administrator\Desktop\ceshi333_订单成分匹配结果_v7.xlsx"
 COMPOSITION_DB_FOLDER = Path(r"D:\匹配数据库文件夹")
 COMPOSITION_DB_SUFFIXES = {".csv", ".xlsx", ".xlsm"}
-COMPOSITION_DB_JOIN_FIELDS = ("SKC_ID", "SPU_ID", "SKU")
+# 数据库匹配字段：SKU ID 是唯一键，优先于 SKC/SPU。
+# 表头比较会自动忽略空格和下划线，因此同时兼容“SKU ID”“SKU_ID”等写法。
+COMPOSITION_DB_JOIN_FIELDS = ("SKU_ID", "SKU", "SKC_ID", "SPU_ID")
 PRODUCT_NO_FIELD_ALIASES = (
     "货号",
     "款号",
@@ -746,11 +748,19 @@ def clean_table_header(value: Any) -> str:
 def find_table_column(headers: list[str], aliases: Iterable[str]) -> int:
     cleaned = [clean_table_header(header) for header in headers]
     casefold_map = {header.casefold(): index for index, header in enumerate(cleaned)}
+    normalized_map = {
+        re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", header.casefold()): index
+        for index, header in enumerate(cleaned)
+    }
     for alias in aliases:
         alias_text = clean_table_header(alias)
         if alias_text in cleaned:
             return cleaned.index(alias_text)
         found = casefold_map.get(alias_text.casefold())
+        if found is not None:
+            return found
+        normalized_alias = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", alias_text.casefold())
+        found = normalized_map.get(normalized_alias)
         if found is not None:
             return found
     return -1
@@ -4163,6 +4173,10 @@ class LandwuGuiApp:
                 order_detail_id = detail.get("id") or detail.get("order_detail_id") or detail.get("item_id")
                 sku = normalize_sku(
                     detail.get("sku")
+                    or detail.get("sku_id")
+                    or detail.get("skuId")
+                    or detail.get("sku_code")
+                    or detail.get("skuCode")
                     or detail.get("productSku")
                     or detail.get("product_sku")
                     or detail.get("product_sku_id")
@@ -4178,7 +4192,8 @@ class LandwuGuiApp:
                 ) or first_value(row, ("product_id", "productId", "spu_id", "spuId", "goods_id", "goodsId"))
                 product_no = get_product_no_from_sources(detail, row)
                 match_candidates = []
-                for value in (skc_id, product_id, sku):
+                # SKU 是唯一规格键，必须优先；SKC/SPU 仅作为兼容旧接口的回退。
+                for value in (sku, skc_id, product_id):
                     if value and value not in match_candidates:
                         match_candidates.append(value)
                 current_size = str(detail.get("size") or detail.get("spec_size") or detail.get("goods_size") or "").strip()
