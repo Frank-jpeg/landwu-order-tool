@@ -182,7 +182,7 @@ LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
 # 触控板精密滚动累计多少像素算一格滚轮
 SCROLL_PIXELS_PER_UNIT = 60
-APP_VERSION = "2026.08.24.2"
+APP_VERSION = "2026.09.03.3"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "领物做单器.pyw"
@@ -568,6 +568,123 @@ def normalize_db_key(value: Any) -> str:
         except InvalidOperation:
             return text
     return re.sub(r"\s+", "", text)
+
+
+OPTION_ID_FIELDS = (
+    "id",
+    "option_id",
+    "optionId",
+    "size_id",
+    "sizeId",
+    "value_id",
+    "valueId",
+    "code_id",
+    "codeId",
+    "key",
+)
+OPTION_VALUE_FIELDS = (
+    "name_zh",
+    "zh_name",
+    "cn_name",
+    "cnName",
+    "display_name",
+    "displayName",
+    "label",
+    "title",
+    "name",
+    "text",
+    "value",
+    "size",
+    "code",
+    "value_code",
+    "valueCode",
+)
+
+
+def normalize_option_id(value: Any) -> str:
+    return normalize_db_key(value)
+
+
+def _option_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
+def _option_field_value(option: dict[str, Any], fields: Iterable[str]) -> Any:
+    aliases = {_option_key(field) for field in fields}
+    for key, value in option.items():
+        if _option_key(key) in aliases and value not in (None, ""):
+            return value
+    return None
+
+
+def _option_id_from_value(option: Any, fallback: Any = "") -> str:
+    if isinstance(option, dict):
+        value = _option_field_value(option, OPTION_ID_FIELDS)
+        if value not in (None, ""):
+            return normalize_option_id(value)
+    return normalize_option_id(fallback)
+
+
+def _option_search_values(option: Any) -> list[str]:
+    if not isinstance(option, dict):
+        text = str(option or "").strip()
+        return [text] if text else []
+    id_aliases = {_option_key(field) for field in OPTION_ID_FIELDS}
+    values: list[str] = []
+    ordered_keys = {_option_key(field): field for field in OPTION_VALUE_FIELDS}
+    for field in OPTION_VALUE_FIELDS:
+        value = _option_field_value(option, (field,))
+        if value in (None, ""):
+            continue
+        text = str(value).strip()
+        if text and text not in values:
+            values.append(text)
+    for key, value in option.items():
+        if _option_key(key) in id_aliases or _option_key(key) not in ordered_keys:
+            continue
+        if isinstance(value, (dict, list, tuple, set)):
+            continue
+        text = str(value or "").strip()
+        if text and text not in values:
+            values.append(text)
+    return values
+
+
+def option_display_name(option: Any, fallback: Any = "") -> str:
+    values = _option_search_values(option)
+    if values:
+        return values[0]
+    text = str(fallback or "").strip()
+    return text
+
+
+def iter_named_options(options: Any) -> Iterable[tuple[str, Any]]:
+    if isinstance(options, dict):
+        for key, option in options.items():
+            yield _option_id_from_value(option, key), option
+    elif isinstance(options, list):
+        for index, option in enumerate(options):
+            yield _option_id_from_value(option, index), option
+
+
+def find_named_option(options: Any, target: str) -> dict[str, Any]:
+    wanted = str(target or "").strip()
+    if not wanted:
+        return {}
+    for option_id, option in iter_named_options(options):
+        if wanted in _option_search_values(option):
+            return {"id": option_id, "name": option_display_name(option, wanted), "raw": option}
+    return {}
+
+
+def find_option_by_id(options: Any, option_id: Any) -> dict[str, Any]:
+    wanted = normalize_option_id(option_id)
+    if not wanted:
+        return {}
+    for current_id, option in iter_named_options(options):
+        if current_id == wanted:
+            return {"id": current_id, "name": option_display_name(option), "raw": option}
+    return {}
 
 
 def format_money(value: Any) -> str:
@@ -1554,43 +1671,120 @@ class LandwuClient:
         result = self.get("/order/getProductInfo", {"productId": str(product_id)})
         return ((result.get("data") or {}).get("data") or {})
 
+    def get_order_size_state(
+        self,
+        order_detail_id: int | str,
+        *,
+        list_detail: dict[str, Any] | None = None,
+        product_id: int | str | None = None,
+    ) -> dict[str, Any]:
+        """读取领物的尺码选项，用选项 ID 作为当前值的唯一判断依据。"""
+        edit_detail = self.get_order_edit_detail(order_detail_id)
+        current = edit_detail.get("data") or {}
+        size_options = edit_detail.get("size") or edit_detail.get("sizes") or {}
+        resolved_product_id = (
+            edit_detail.get("product_id")
+            or current.get("product_id")
+            or product_id
+            or (list_detail or {}).get("product_id")
+            or (list_detail or {}).get("productId")
+        )
+        product_info: dict[str, Any] = {}
+        if resolved_product_id and not size_options:
+            product_info = self.get_order_product_info(resolved_product_id)
+            size_options = product_info.get("size") or product_info.get("sizes") or {}
+
+        current_size_id = normalize_option_id(
+            current.get("size_id")
+            or current.get("sizeId")
+            or (list_detail or {}).get("size_id")
+            or (list_detail or {}).get("sizeId")
+        )
+        current_option = find_option_by_id(size_options, current_size_id)
+        if not current_option:
+            current_size = current.get("size") or (list_detail or {}).get("size") or ""
+            current_option = find_named_option(size_options, current_size)
+            current_size_id = current_option.get("id") or current_size_id
+        current_name = current_option.get("name") or str(current.get("size") or (list_detail or {}).get("size") or "").strip()
+        return {
+            "orderDetailId": str(order_detail_id),
+            "productId": resolved_product_id,
+            "currentSizeId": normalize_option_id(current_size_id),
+            "currentSizeName": str(current_name or "").strip(),
+            "sizeOptions": size_options,
+            "editDetail": edit_detail,
+            "productInfo": product_info,
+        }
+
+    def inspect_payment_size_states(
+        self,
+        rows: list[dict[str, Any]],
+        selected_order_ids: Iterable[str],
+    ) -> dict[str, Any]:
+        selected = {str(item) for item in selected_order_ids if str(item)}
+        generic_by_order: dict[str, dict[str, Any]] = {}
+        unresolved_by_order: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            order_id = str(row.get("order_id") or "")
+            if not order_id or order_id not in selected:
+                continue
+            for detail in row.get("detail") or []:
+                if not isinstance(detail, dict):
+                    continue
+                detail_id = detail.get("id") or detail.get("order_detail_id") or detail.get("item_id")
+                if not detail_id:
+                    continue
+                sku = normalize_sku(
+                    detail.get("sku")
+                    or detail.get("sku_id")
+                    or detail.get("skuId")
+                    or detail.get("productSku")
+                    or detail.get("product_sku")
+                )
+                try:
+                    state = self.get_order_size_state(
+                        detail_id,
+                        list_detail=detail,
+                        product_id=detail.get("product_id") or detail.get("productId"),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    unresolved_by_order.setdefault(
+                        order_id,
+                        {"order_id": order_id, "order_no": str(row.get("order_no") or ""), "skus": []},
+                    )["skus"].append(sku or "未识别 SKU")
+                    continue
+                options = state.get("sizeOptions") or {}
+                generic_option = find_named_option(options, "通用尺码")
+                current_id = normalize_option_id(state.get("currentSizeId"))
+                generic_id = normalize_option_id(generic_option.get("id"))
+                current_name = str(state.get("currentSizeName") or "").strip()
+                is_generic = bool(
+                    (current_id and generic_id and current_id == generic_id)
+                    or current_name == "通用尺码"
+                )
+                if is_generic:
+                    generic_by_order.setdefault(
+                        order_id,
+                        {"order_id": order_id, "order_no": str(row.get("order_no") or ""), "skus": []},
+                    )["skus"].append(sku or "未识别 SKU")
+                elif not current_id or not options:
+                    unresolved_by_order.setdefault(
+                        order_id,
+                        {"order_id": order_id, "order_no": str(row.get("order_no") or ""), "skus": []},
+                    )["skus"].append(sku or "未识别 SKU")
+        return {
+            "genericSizeOrders": list(generic_by_order.values()),
+            "unresolvedSizeOrders": list(unresolved_by_order.values()),
+        }
+
     @staticmethod
     def find_named_option_id(options: Any, target: str) -> str:
-        target = str(target or "").strip()
-        if not target:
-            return ""
-        if isinstance(options, dict):
-            iterable = options.items()
-        elif isinstance(options, list):
-            iterable = ((item.get("id"), item) for item in options if isinstance(item, dict))
-        else:
-            return ""
-        for option_id, option in iterable:
-            if isinstance(option, dict):
-                option_name = option.get("name") or option.get("name_zh") or option.get("zh_name") or option.get("value")
-            else:
-                option_name = option
-            if str(option_name or "").strip() == target:
-                return str(option_id)
-        return ""
+        return str(find_named_option(options, target).get("id") or "")
 
     @staticmethod
     def format_named_options(options: Any) -> str:
-        names: list[str] = []
-        if isinstance(options, dict):
-            iterable = options.values()
-        elif isinstance(options, list):
-            iterable = options
-        else:
-            iterable = []
-        for option in iterable:
-            if isinstance(option, dict):
-                name = option.get("name") or option.get("name_zh") or option.get("zh_name") or option.get("value")
-            else:
-                name = option
-            text = str(name or "").strip()
-            if text:
-                names.append(text)
+        names = [option_display_name(option) for _option_id, option in iter_named_options(options)]
+        names = [name for name in names if name]
         return "、".join(names[:12])
 
     def change_order_detail_size(
@@ -1622,7 +1816,20 @@ class LandwuClient:
             extra = f"；当前可选：{option_text}" if option_text else ""
             raise RuntimeError(f"订单明细 {order_detail_id} 找不到尺码：{target}（已搜索产品编码{extra}）")
 
-        current_size = str(current.get("size") or "").strip()
+        current_size_id = normalize_option_id(current.get("size_id") or current.get("sizeId"))
+        current_option = find_option_by_id(size_map, current_size_id)
+        current_size = str(current_option.get("name") or current.get("size") or "").strip()
+        if current_size_id and normalize_option_id(target_size_id) == current_size_id:
+            return {
+                "orderDetailId": str(order_detail_id),
+                "sku": str(current.get("sku") or ""),
+                "fromSize": current_size,
+                "fromSizeId": current_size_id,
+                "toSize": target,
+                "toSizeId": normalize_option_id(target_size_id),
+                "skipped": True,
+                "reason": "当前尺码 ID 已是目标尺码 ID，未重复提交",
+            }
         current_color = str(current.get("colour") or current.get("color") or "").strip()
         current_color_id = str(current.get("colour_id") or current.get("color_id") or "").strip()
         color_source = "orderDetail"
@@ -1655,8 +1862,10 @@ class LandwuClient:
             "orderDetailId": str(order_detail_id),
             "sku": str(current.get("sku") or ""),
             "fromSize": current_size,
+            "fromSizeId": current_size_id,
             "toSize": target,
-            "toSizeId": target_size_id,
+            "toSizeId": normalize_option_id(target_size_id),
+            "skipped": False,
             "sizeSource": size_source,
             "color": current_color,
             "colorId": current_color_id,
@@ -1721,9 +1930,12 @@ class LandwuClient:
                         "error": str(exc),
                     }
                 )
+        success_count = sum(1 for result in results if not result.get("skipped"))
+        skipped_count = sum(1 for result in results if result.get("skipped"))
         return {
-            "message": f"尺码修改完成：成功 {len(results)}，失败 {len(failed)}",
-            "successCount": len(results),
+            "message": f"尺码修改完成：提交成功 {success_count}，已是目标 {skipped_count}，失败 {len(failed)}",
+            "successCount": success_count,
+            "skippedCount": skipped_count,
             "failedCount": len(failed),
             "skippedStaleCount": len(live_filter["skipped"]),
             "results": results,
@@ -4197,6 +4409,7 @@ class LandwuGuiApp:
                     if value and value not in match_candidates:
                         match_candidates.append(value)
                 current_size = str(detail.get("size") or detail.get("spec_size") or detail.get("goods_size") or "").strip()
+                current_size_id = normalize_option_id(detail.get("size_id") or detail.get("sizeId"))
                 if not order_detail_id or not sku:
                     continue
                 items.append(
@@ -4213,6 +4426,8 @@ class LandwuGuiApp:
                         "match_candidates": match_candidates,
                         "order_detail_id": str(order_detail_id),
                         "current_size": current_size,
+                        "current_size_id": current_size_id,
+                        "list_detail": detail,
                     }
                 )
         return items
@@ -4418,7 +4633,13 @@ class LandwuGuiApp:
             return
         self._apply_db_composition_to_size_views(views, status_var, db_folder)
 
-    def _match_payment_size_items_with_db(self, items: list[dict[str, Any]], db_folder: Path) -> dict[str, Any]:
+    def _match_payment_size_items_with_db(
+        self,
+        items: list[dict[str, Any]],
+        db_folder: Path,
+        *,
+        client: LandwuClient | None = None,
+    ) -> dict[str, Any]:
         query_values: list[str] = []
         for item in items:
             candidates = item.get("match_candidates") or [item.get("sku")]
@@ -4443,9 +4664,28 @@ class LandwuGuiApp:
             result = {
                 "composition": "",
                 "target_size": "",
+                "current_size": str(item.get("current_size") or "").strip(),
+                "current_size_id": normalize_option_id(item.get("current_size_id")),
+                "target_size_id": "",
                 "note": "未匹配",
                 "checked": False,
             }
+            if client and detail_id:
+                try:
+                    size_state = client.get_order_size_state(
+                        detail_id,
+                        list_detail=item.get("list_detail") if isinstance(item.get("list_detail"), dict) else None,
+                        product_id=item.get("product_id"),
+                    )
+                    if size_state.get("currentSizeId"):
+                        item["current_size_id"] = normalize_option_id(size_state.get("currentSizeId"))
+                        result["current_size_id"] = item["current_size_id"]
+                    if size_state.get("currentSizeName"):
+                        item["current_size"] = str(size_state.get("currentSizeName") or "").strip()
+                        result["current_size"] = item["current_size"]
+                    item["size_options"] = size_state.get("sizeOptions") or {}
+                except Exception as exc:  # noqa: BLE001
+                    result["size_state_error"] = str(exc)
             record = None
             for value in item.get("match_candidates") or [item.get("sku")]:
                 key = normalize_db_key(value)
@@ -4465,13 +4705,19 @@ class LandwuGuiApp:
             composition = str(record.get("composition") or "")
             target = str(record.get("target_size") or "")
             current = str(item.get("current_size") or "").strip()
+            current_size_id = normalize_option_id(item.get("current_size_id"))
+            target_option = find_named_option(item.get("size_options") or {}, target)
+            target_size_id = normalize_option_id(target_option.get("id"))
             result["composition"] = composition
             result["target_size"] = target
+            result["current_size"] = current
+            result["current_size_id"] = current_size_id
+            result["target_size_id"] = target_size_id
             if not target:
                 result["note"] = "无法识别"
                 no_target += 1
-            elif target == current:
-                result["note"] = "相同跳过"
+            elif (current_size_id and target_size_id and current_size_id == target_size_id) or target == current:
+                result["note"] = "相同跳过（尺码ID）" if current_size_id and target_size_id else "相同跳过"
                 same += 1
             else:
                 result["note"] = str(record.get("db_field") or "已匹配")
@@ -4482,6 +4728,7 @@ class LandwuGuiApp:
                         "sku": item.get("sku"),
                         "order_detail_id": item.get("order_detail_id"),
                         "target_size": target,
+                        "target_size_id": target_size_id,
                     }
                 )
                 changed += 1
@@ -4752,7 +4999,10 @@ class LandwuGuiApp:
         db_folder = self._get_composition_db_folder()
 
         def task():
-            return self._match_payment_size_items_with_db(items, db_folder)
+            def worker(_session, client: LandwuClient) -> dict[str, Any]:
+                return self._match_payment_size_items_with_db(items, db_folder, client=client)
+
+            return with_landwu_session(self._make_runtime_args(), worker)
 
         def on_match_success(payload: dict[str, Any]) -> None:
             message = self._format_payment_size_match_message(payload)
@@ -4893,7 +5143,8 @@ class LandwuGuiApp:
             sku_text = "、".join(skus[:3])
             if len(skus) > 3:
                 sku_text += "…"
-            warning_orders.append(f"{order_no}（{sku_text}）" if sku_text else order_no)
+            prefix = "无法确认尺码" if item.get("uncertain") else "通用尺码"
+            warning_orders.append(f"{prefix}：{order_no}（{sku_text}）" if sku_text else f"{prefix}：{order_no}")
 
         safe_count = max(0, counts["checked"] - len(generic_size_orders))
         result: dict[str, str | None] = {"action": None}
@@ -4930,7 +5181,7 @@ class LandwuGuiApp:
         warning_frame.pack(fill="x", pady=(14, 0))
         tk.Label(
             warning_frame,
-            text="有未改成分尺码（通用尺码）的订单，确认付款吗？",
+            text="有未改成分尺码或无法确认尺码的订单，确认付款吗？",
             justify="left",
             anchor="w",
             bg="#FEF2F2",
@@ -4939,7 +5190,7 @@ class LandwuGuiApp:
         ).pack(fill="x", anchor="w")
         tk.Label(
             warning_frame,
-            text="通用尺码订单：" + "；".join(warning_orders),
+            text="风险订单：" + "；".join(warning_orders),
             justify="left",
             anchor="w",
             wraplength=500,
@@ -5179,49 +5430,71 @@ class LandwuGuiApp:
             messagebox.showinfo("确认支付", "当前没有勾选待付款 JIT。")
             return
         counts = self.get_payment_counts()
-        generic_size_orders = self.get_checked_payment_generic_size_orders()
-        payment_action = self._confirm_payment_with_size_warning(counts, selected_order_nos, generic_size_orders)
-        if not payment_action:
-            return
-        if payment_action == "safe_only":
-            generic_order_ids = {str(item.get("order_id") or "") for item in generic_size_orders if item.get("order_id")}
-            selected_ids = [order_id for order_id in selected_ids if order_id not in generic_order_ids]
-            if not selected_ids:
-                messagebox.showinfo("确认支付", "没有可支付的已改好尺码订单。请先修改通用尺码。")
+        rows_snapshot = list(self.order_rows_by_status_iid.get(2, {}).values())
+
+        def inspect_task():
+            return with_landwu_session(
+                self._make_runtime_args(),
+                lambda _session, client: client.inspect_payment_size_states(rows_snapshot, selected_ids),
+            )
+
+        def continue_payment(inspection: dict[str, Any]) -> None:
+            generic_size_orders = inspection.get("genericSizeOrders") or []
+            unresolved_size_orders = inspection.get("unresolvedSizeOrders") or []
+            risk_orders: list[dict[str, Any]] = list(generic_size_orders)
+            known_ids = {str(item.get("order_id") or "") for item in risk_orders}
+            for item in unresolved_size_orders:
+                order_id = str(item.get("order_id") or "")
+                if order_id and order_id in known_ids:
+                    continue
+                risk_orders.append({**item, "uncertain": True})
+            if unresolved_size_orders:
+                self._log("支付前有尺码状态无法确认，已按风险订单处理", unresolved_size_orders)
+            payment_action = self._confirm_payment_with_size_warning(counts, selected_order_nos, risk_orders)
+            if not payment_action:
                 return
-            self._log(f"支付跳过通用尺码订单：{len(generic_order_ids)} 单")
+            payment_ids = list(selected_ids)
+            if payment_action == "safe_only":
+                risk_order_ids = {str(item.get("order_id") or "") for item in risk_orders if item.get("order_id")}
+                payment_ids = [order_id for order_id in payment_ids if order_id not in risk_order_ids]
+                if not payment_ids:
+                    messagebox.showinfo("确认支付", "没有可支付的已确认尺码订单。请先处理风险订单。")
+                    return
+                self._log(f"支付跳过风险订单：{len(risk_order_ids)} 单")
 
-        def task():
-            def worker(_session, client: LandwuClient) -> dict[str, Any]:
-                jit_tag = client.get_jit_tag()
-                payment = client.resolve_payment_orders(
-                    ids=selected_ids,
-                    status=2,
-                    limit=100,
-                    plat_order_type=jit_tag["id"],
-                )
-                ids = payment["ids"]
-                if not ids:
+            def task():
+                def worker(_session, client: LandwuClient) -> dict[str, Any]:
+                    jit_tag = client.get_jit_tag()
+                    payment = client.resolve_payment_orders(
+                        ids=payment_ids,
+                        status=2,
+                        limit=100,
+                        plat_order_type=jit_tag["id"],
+                    )
+                    ids = payment["ids"]
+                    if not ids:
+                        return {
+                            "message": "当前勾选的待付款 JIT 已不存在或状态已变化，未支付",
+                            "ids": [],
+                        }
+                    preview = client.get_check_order(ids)
+                    validation = require_payment_preview_ok(preview, ids)
                     return {
-                        "message": "当前勾选的待付款 JIT 已不存在或状态已变化，未支付",
-                        "ids": [],
+                        "message": f"待付款 JIT 已提交支付：当前勾选 {len(ids)} 单",
+                        "ids": ids,
+                        "orderNos": [row.get("order_no") for row in payment["rows"]],
+                        "preview": preview,
+                        "validation": validation,
+                        "commitRequested": True,
+                        "forceRequested": False,
+                        "result": client.order_pay(ids, commit=True, force=False),
                     }
-                preview = client.get_check_order(ids)
-                validation = require_payment_preview_ok(preview, ids)
-                return {
-                    "message": f"待付款 JIT 已提交支付：当前勾选 {len(ids)} 单",
-                    "ids": ids,
-                    "orderNos": [row.get("order_no") for row in payment["rows"]],
-                    "preview": preview,
-                    "validation": validation,
-                    "commitRequested": True,
-                    "forceRequested": False,
-                    "result": client.order_pay(ids, commit=True, force=False),
-                }
 
-            return with_landwu_session(self._make_runtime_args(), worker)
+                return with_landwu_session(self._make_runtime_args(), worker)
 
-        self._run_task("待付款 JIT 预检并支付", task, on_success=lambda _payload: self.refresh_summary())
+            self._run_task("待付款 JIT 预检并支付", task, on_success=lambda _payload: self.refresh_summary())
+
+        self._run_task("读取待付款尺码状态", inspect_task, on_success=continue_payment)
 
     def process_until_review(self) -> None:
         output_dir = self.output_dir_var.get().strip()
