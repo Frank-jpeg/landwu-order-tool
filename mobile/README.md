@@ -7,7 +7,7 @@
 脚本地址：
 
 ```text
-https://raw.githubusercontent.com/Frank-jpeg/landwu-order-tool/codex/landwu-mobile/mobile/landwu-mobile-v2026.09.03.4.user.js
+https://raw.githubusercontent.com/Frank-jpeg/landwu-order-tool/codex/landwu-mobile/mobile/landwu-mobile-v2026.09.04.1.user.js
 ```
 
 安卓建议用支持 userscript 的浏览器安装脚本猫或 Tampermonkey。iPhone 可用支持 userscript 的 Safari 扩展。安装后，用同一个手机浏览器打开并登录 `https://user.landwu.com/`。
@@ -73,7 +73,7 @@ https://raw.githubusercontent.com/Frank-jpeg/landwu-order-tool/codex/landwu-mobi
 ]
 ```
 
-匹配优先级为 `SKU_ID -> SKU -> SKC_ID -> SPU_ID`。如果 `target_size` 为空，脚本会根据 `composition` 推断：优先 `人棉`，再 `涤纶/聚酯/polyester`，再 `棉`。手机版 APK 使用全屏工作台脚本 `landwu-mobile-v2026.09.03.4.user.js`。
+匹配优先级为 `SKU_ID -> SKU -> SKC_ID -> SPU_ID`。如果 `target_size` 为空，脚本会根据 `composition` 推断：优先 `人棉`，再 `涤纶/聚酯/polyester`，再 `棉`。手机版 APK 使用全屏工作台脚本 `landwu-mobile-v2026.09.04.1.user.js`。
 
 数据库没有匹配到时，会从货号、款号等字段中提取合法的 `YYYYMMDD` 日期；日期大于等于 `2026-07-01` 的商品自动建议为 `涤纶`。数据库匹配优先于这条兜底规则。
 
