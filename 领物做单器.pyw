@@ -182,7 +182,7 @@ LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
 # 触控板精密滚动累计多少像素算一格滚轮
 SCROLL_PIXELS_PER_UNIT = 60
-APP_VERSION = "2026.09.03.4"
+APP_VERSION = "2026.09.04.1"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "领物做单器.pyw"
@@ -605,6 +605,27 @@ def normalize_option_id(value: Any) -> str:
     return normalize_db_key(value)
 
 
+def first_option_id(*sources: Any) -> str:
+    """兼容领物接口把当前尺码 ID 放在详情顶层、data 或嵌套 size 中。"""
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        value = _option_field_value(source, OPTION_ID_FIELDS)
+        if value not in (None, ""):
+            return normalize_option_id(value)
+        nested = source.get("size")
+        if isinstance(nested, dict):
+            value = _option_field_value(nested, OPTION_ID_FIELDS)
+            if value not in (None, ""):
+                return normalize_option_id(value)
+        nested = source.get("data")
+        if isinstance(nested, dict):
+            value = _option_field_value(nested, OPTION_ID_FIELDS)
+            if value not in (None, ""):
+                return normalize_option_id(value)
+    return ""
+
+
 def _option_key(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
 
@@ -622,6 +643,9 @@ def _option_id_from_value(option: Any, fallback: Any = "") -> str:
         value = _option_field_value(option, OPTION_ID_FIELDS)
         if value not in (None, ""):
             return normalize_option_id(value)
+    scalar_id = normalize_option_id(option)
+    if scalar_id.isdigit():
+        return scalar_id
     return normalize_option_id(fallback)
 
 
@@ -1694,12 +1718,7 @@ class LandwuClient:
             product_info = self.get_order_product_info(resolved_product_id)
             size_options = product_info.get("size") or product_info.get("sizes") or {}
 
-        current_size_id = normalize_option_id(
-            current.get("size_id")
-            or current.get("sizeId")
-            or (list_detail or {}).get("size_id")
-            or (list_detail or {}).get("sizeId")
-        )
+        current_size_id = first_option_id(edit_detail, current, list_detail or {})
         current_option = find_option_by_id(size_options, current_size_id)
         if not current_option:
             current_size = current.get("size") or (list_detail or {}).get("size") or ""
@@ -1816,7 +1835,7 @@ class LandwuClient:
             extra = f"；当前可选：{option_text}" if option_text else ""
             raise RuntimeError(f"订单明细 {order_detail_id} 找不到尺码：{target}（已搜索产品编码{extra}）")
 
-        current_size_id = normalize_option_id(current.get("size_id") or current.get("sizeId"))
+        current_size_id = first_option_id(edit_detail, current)
         current_option = find_option_by_id(size_map, current_size_id)
         current_size = str(current_option.get("name") or current.get("size") or "").strip()
         if current_size_id and normalize_option_id(target_size_id) == current_size_id:
