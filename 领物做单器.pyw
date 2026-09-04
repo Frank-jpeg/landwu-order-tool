@@ -182,7 +182,7 @@ LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
 # 触控板精密滚动累计多少像素算一格滚轮
 SCROLL_PIXELS_PER_UNIT = 60
-APP_VERSION = "2026.09.04.1"
+APP_VERSION = "2026.09.04.3"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "领物做单器.pyw"
@@ -600,6 +600,15 @@ OPTION_VALUE_FIELDS = (
     "valueCode",
 )
 
+# 领物接口偶尔返回尺码英文/拼音名；仅用于找到同一个真实选项 ID，
+# 不改写界面显示值，也不把名称当作最终的跳过依据。
+SIZE_NAME_ALIASES = {
+    "涤纶": {"dilun", "polyester", "polyesterfiber"},
+    "通用尺码": {"one size", "onesize", "one-size", "universal", "freesize"},
+    "棉": {"mian", "cotton"},
+    "人棉": {"renmian", "rayon", "viscose"},
+}
+
 
 def normalize_option_id(value: Any) -> str:
     return normalize_db_key(value)
@@ -674,6 +683,25 @@ def _option_search_values(option: Any) -> list[str]:
     return values
 
 
+def _normalized_option_name(value: Any) -> str:
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", str(value or "").strip().lower())
+
+
+def _size_name_matches(value: Any, target: Any) -> bool:
+    value_text = str(value or "").strip()
+    target_text = str(target or "").strip()
+    if not value_text or not target_text:
+        return False
+    if value_text == target_text:
+        return True
+    value_key = _normalized_option_name(value_text)
+    target_key = _normalized_option_name(target_text)
+    if value_key == target_key:
+        return True
+    aliases = SIZE_NAME_ALIASES.get(target_text, set())
+    return value_key in {_normalized_option_name(item) for item in aliases}
+
+
 def option_display_name(option: Any, fallback: Any = "") -> str:
     values = _option_search_values(option)
     if values:
@@ -696,7 +724,7 @@ def find_named_option(options: Any, target: str) -> dict[str, Any]:
     if not wanted:
         return {}
     for option_id, option in iter_named_options(options):
-        if wanted in _option_search_values(option):
+        if any(_size_name_matches(value, wanted) for value in _option_search_values(option)):
             return {"id": option_id, "name": option_display_name(option, wanted), "raw": option}
     return {}
 
@@ -1779,7 +1807,7 @@ class LandwuClient:
                 current_name = str(state.get("currentSizeName") or "").strip()
                 is_generic = bool(
                     (current_id and generic_id and current_id == generic_id)
-                    or current_name == "通用尺码"
+                    or _size_name_matches(current_name, "通用尺码")
                 )
                 if is_generic:
                     generic_by_order.setdefault(
@@ -4739,7 +4767,10 @@ class LandwuGuiApp:
             if not target:
                 result["note"] = "无法识别"
                 no_target += 1
-            elif (current_size_id and target_size_id and current_size_id == target_size_id) or target == current:
+            elif (
+                (current_size_id and target_size_id and current_size_id == target_size_id)
+                or _size_name_matches(current, target)
+            ):
                 result["note"] = "相同跳过（尺码ID）" if current_size_id and target_size_id else "相同跳过"
                 same += 1
             else:
@@ -5500,22 +5531,46 @@ class LandwuGuiApp:
                             "message": "当前勾选的待付款 JIT 已不存在或状态已变化，未支付",
                             "ids": [],
                         }
-                    preview = client.get_check_order(ids)
-                    validation = require_payment_preview_ok(preview, ids)
+                    row_by_id = {str(row.get("order_id") or ""): row for row in payment.get("rows") or []}
+                    succeeded: list[str] = []
+                    failed: list[dict[str, str]] = []
+                    for order_id in ids:
+                        row = row_by_id.get(str(order_id), {})
+                        order_no = str(row.get("order_no") or order_id)
+                        try:
+                            preview = client.get_check_order([order_id])
+                            require_payment_preview_ok(preview, [order_id])
+                            client.order_pay([order_id], commit=True, force=False)
+                            succeeded.append(str(order_id))
+                        except Exception as exc:  # noqa: BLE001
+                            failed.append({"orderId": str(order_id), "orderNo": order_no, "error": str(exc)})
                     return {
-                        "message": f"待付款 JIT 已提交支付：当前勾选 {len(ids)} 单",
-                        "ids": ids,
-                        "orderNos": [row.get("order_no") for row in payment["rows"]],
-                        "preview": preview,
-                        "validation": validation,
+                        "message": f"待付款 JIT 已提交支付：成功 {len(succeeded)} 单，跳过 {len(failed)} 单",
+                        "ids": succeeded,
+                        "orderNos": [row_by_id.get(order_id, {}).get("order_no") for order_id in succeeded],
+                        "failed": failed,
                         "commitRequested": True,
                         "forceRequested": False,
-                        "result": client.order_pay(ids, commit=True, force=False),
+                        "result": {"successIds": succeeded, "failed": failed},
                     }
 
                 return with_landwu_session(self._make_runtime_args(), worker)
 
-            self._run_task("待付款 JIT 预检并支付", task, on_success=lambda _payload: self.refresh_summary())
+            def on_payment_success(payload: dict[str, Any]) -> None:
+                self.refresh_summary()
+                failed = payload.get("failed") or []
+                if failed:
+                    detail = "\n".join(
+                        f"{item.get('orderNo') or item.get('orderId')}: {item.get('error') or '已跳过'}"
+                        for item in failed[:8]
+                    )
+                    if len(failed) > 8:
+                        detail += f"\n……另有 {len(failed) - 8} 单"
+                    messagebox.showwarning("支付完成（部分跳过）", f"{payload.get('message') or ''}\n\n跳过订单：\n{detail}")
+                else:
+                    messagebox.showinfo("支付完成", payload.get("message") or "支付已完成")
+
+            self._run_task("待付款 JIT 预检并支付", task, on_success=on_payment_success)
 
         self._run_task("读取待付款尺码状态", inspect_task, on_success=continue_payment)
 
