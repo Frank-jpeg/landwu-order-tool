@@ -1757,6 +1757,18 @@ class LandwuClient:
         result = self.get("/order/getProductInfo", {"productId": str(product_id)})
         return ((result.get("data") or {}).get("data") or {})
 
+    def resolve_order_detail_display(self, order_detail_id: int | str) -> dict[str, str]:
+        detail = self.get_order_edit_detail(order_detail_id)
+        current = detail.get("data") or {}
+        colors = detail.get("color") or {}
+        sizes = detail.get("size") or {}
+        color_id = normalize_option_id(current.get("colour_id") or current.get("color_id"))
+        size_id = normalize_option_id(current.get("size_id") or current.get("sizeId"))
+        return {
+            "color": str(colors.get(color_id) or current.get("colour") or current.get("color") or "").strip(),
+            "size": str(sizes.get(size_id) or current.get("size") or "").strip(),
+        }
+
     def get_order_size_state(
         self,
         order_detail_id: int | str,
@@ -5674,6 +5686,17 @@ class LandwuGuiApp:
             except Exception:
                 self.quantity_editor_window = None
         items = self._build_vmi_quantity_items(row)
+        # 通过领物详情的颜色/尺码 ID 映射获取中文显示，失败时保留列表原值。
+        try:
+            def load_display(_session, client):
+                for item in items:
+                    try:
+                        item.update(client.resolve_order_detail_display(item["order_detail_id"]))
+                    except Exception:
+                        pass
+            with_landwu_session(self._make_runtime_args(), load_display)
+        except Exception:
+            pass
         window = tk.Toplevel(self.root)
         self.quantity_editor_window = window
         window.title("修改备货单下单数量")
