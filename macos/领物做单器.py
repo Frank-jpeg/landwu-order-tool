@@ -192,7 +192,7 @@ LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
 # 一格滚轮对应的滚动像素；Text/Canvas 用像素滚动，避免整张卡片一次跳过去
 SCROLL_PIXELS_PER_UNIT = 60
-APP_VERSION = "2026.09.07.1"
+APP_VERSION = "2026.09.07.2"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "macos/领物做单器.py"
@@ -3119,65 +3119,28 @@ class LandwuGuiApp:
         self._bind_touchpad_scroll(tree, lambda event, _tree=tree: self._scroll_touchpad_target(_tree, event))
         self.trees[status] = tree
 
-    def _create_payment_cards_view(self, parent: ttk.Frame) -> None:
-        text = tk.Text(
-            parent,
-            wrap="word",
-            bg="#F8F9FA",
-            fg="#1F2933",
-            relief="flat",
-            borderwidth=0,
-            highlightthickness=1,
-            highlightbackground="#CBD5E1",
-            highlightcolor="#0D6EFD",
-            padx=8,
-            pady=6,
-            cursor="arrow",
-        )
-        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=text.yview)
-        text.configure(yscrollcommand=scrollbar.set)
-        text.grid(row=0, column=0, sticky="nsew")
+    def _create_scrollable_cards_view(self, parent: ttk.Frame) -> tuple[tk.Canvas, tk.Frame]:
+        # 卡片通过 pack 放进独立 Frame；Text 不会把 pack 的子控件计入滚动范围。
+        canvas = tk.Canvas(parent, bg="#F8F9FA", highlightthickness=0, yscrollincrement=1)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        body = tk.Frame(canvas, bg="#F8F9FA")
+        body_window = canvas.create_window((0, 0), window=body, anchor="nw")
+        # 图片异步加载后卡片会变高，内容尺寸改变时也要更新滚动范围。
+        body.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(body_window, width=event.width))
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
-        text.tag_configure("payment_title", font=("Microsoft YaHei UI", 9, "bold"), foreground="#1F2933")
-        text.tag_configure("payment_meta", font=("Microsoft YaHei UI", 9), foreground="#52606D")
-        text.tag_configure("payment_sku", font=("Microsoft YaHei UI", 9, "bold"), foreground="#52606D", justify="center")
-        text.tag_configure("payment_card_gap", spacing1=8, spacing3=8)
-        text.tag_configure("payment_selected", background="#E7F1FF")
-        text.tag_configure("payment_error", foreground="#B02A37")
-        text.bind("<Configure>", self._resize_payment_text_cards, add="+")
-        self._bind_widget_mousewheel(text, text)
-        self.payment_text = text
-        self.payment_canvas = text
-        self.payment_body = text
+        for widget in (canvas, body, scrollbar):
+            self._bind_widget_mousewheel(widget, canvas)
+        return canvas, body
+
+    def _create_payment_cards_view(self, parent: ttk.Frame) -> None:
+        self.payment_canvas, self.payment_body = self._create_scrollable_cards_view(parent)
         self._set_payment_cards_empty("待付款订单会显示在这里，每单直接带图片预览。")
 
     def _create_edit_cards_view(self, parent: ttk.Frame) -> None:
-        text = tk.Text(
-            parent,
-            wrap="word",
-            bg="#F8F9FA",
-            fg="#1F2933",
-            relief="flat",
-            borderwidth=0,
-            highlightthickness=1,
-            highlightbackground="#CBD5E1",
-            highlightcolor="#0D6EFD",
-            padx=8,
-            pady=6,
-            cursor="arrow",
-        )
-        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=text.yview)
-        text.configure(yscrollcommand=scrollbar.set)
-        text.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns")
-        text.tag_configure("edit_title", font=("Microsoft YaHei UI", 9, "bold"), foreground="#1F2933")
-        text.tag_configure("edit_meta", font=("Microsoft YaHei UI", 9), foreground="#52606D")
-        text.tag_configure("edit_card_gap", spacing1=8, spacing3=8)
-        text.tag_configure("edit_selected", background="#E7F1FF")
-        self._bind_widget_mousewheel(text, text)
-        self.edit_text = text
-        self.edit_canvas = text
-        self.edit_body = text
+        self.edit_canvas, self.edit_body = self._create_scrollable_cards_view(parent)
         self._set_edit_cards_empty("待编辑订单会显示在这里，打勾的 JIT 才会进入一键流程。")
 
     def _on_card_canvas_mousewheel(self, event) -> str | None:
@@ -3360,7 +3323,14 @@ class LandwuGuiApp:
         if not pixels:
             return None
         try:
-            target.yview_scroll(pixels, "pixels")
+            if isinstance(target, tk.Canvas):
+                # Canvas 只接受 units/pages；将一格设为一像素，保留触控板的小幅滚动。
+                if target.yview() == (0.0, 1.0):
+                    return "break"
+                target.configure(yscrollincrement=1)
+                target.yview_scroll(pixels, "units")
+            else:
+                target.yview_scroll(pixels, "pixels")
             return "break"
         except tk.TclError:
             pass
