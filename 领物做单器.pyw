@@ -182,7 +182,7 @@ LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
 # 触控板精密滚动累计多少像素算一格滚轮
 SCROLL_PIXELS_PER_UNIT = 60
-APP_VERSION = "2026.09.04.3"
+APP_VERSION = "2026.09.06.1"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "领物做单器.pyw"
@@ -1878,7 +1878,7 @@ class LandwuClient:
                 "reason": "当前尺码 ID 已是目标尺码 ID，未重复提交",
             }
         current_color = str(current.get("colour") or current.get("color") or "").strip()
-        current_color_id = str(current.get("colour_id") or current.get("color_id") or "").strip()
+        current_color_id = str(current.get("colour_id") or current.get("color_id") or current.get("colourId") or current.get("colorId") or "").strip()
         color_source = "orderDetail"
         if not current_color_id and current_color:
             current_color_id = self.find_named_option_id(color_map, current_color)
@@ -1919,6 +1919,138 @@ class LandwuClient:
             "colorSource": color_source,
             "payload": payload,
             "response": response,
+        }
+
+    def change_order_detail_quantity(
+        self,
+        *,
+        order_detail_id: int | str,
+        target_quantity: int | str,
+        relation_type: int = 1,
+    ) -> dict[str, Any]:
+        """仅修改订单明细的备货件数，其他关联信息全部沿用当前值。"""
+        try:
+            quantity = int(str(target_quantity).strip())
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"订单明细 {order_detail_id} 的件数不是有效整数") from exc
+        if quantity < 1:
+            raise RuntimeError(f"订单明细 {order_detail_id} 的件数必须大于 0")
+
+        edit_detail = self.get_order_edit_detail(order_detail_id)
+        current = edit_detail.get("data") or {}
+        product_id = edit_detail.get("product_id") or current.get("product_id")
+        color_map = edit_detail.get("color") or {}
+        size_map = edit_detail.get("size") or {}
+        current_quantity = current.get("buy_number") or current.get("buyNumber") or 1
+        try:
+            current_quantity = int(current_quantity)
+        except (TypeError, ValueError):
+            current_quantity = 1
+
+        current_color = str(current.get("colour") or current.get("color") or "").strip()
+        current_color_id = str(current.get("colour_id") or current.get("color_id") or current.get("colourId") or current.get("colorId") or "").strip()
+        if not current_color_id and current_color:
+            current_color_id = self.find_named_option_id(color_map, current_color)
+        if not current_color_id and current_color and product_id:
+            product_info = self.get_order_product_info(product_id)
+            current_color_id = self.find_named_option_id(product_info.get("color") or {}, current_color)
+        if not current_color_id:
+            raise RuntimeError(f"订单明细 {order_detail_id} 找不到原颜色ID，已阻止提交")
+
+        current_size_id = normalize_option_id(current.get("size_id") or current.get("sizeId") or first_option_id(edit_detail, current))
+        current_size = ""
+        if current_size_id:
+            current_size = str(find_option_by_id(size_map, current_size_id).get("name") or "").strip()
+        if not current_size:
+            current_size = str(current.get("size") or "").strip()
+            if current_size and not current_size_id:
+                current_size_id = self.find_named_option_id(size_map, current_size)
+        if not current_size_id:
+            raise RuntimeError(f"订单明细 {order_detail_id} 找不到原尺码ID，已阻止提交")
+
+        if current_quantity == quantity:
+            return {
+                "orderDetailId": str(order_detail_id),
+                "sku": str(current.get("sku") or ""),
+                "fromQuantity": current_quantity,
+                "toQuantity": quantity,
+                "skipped": True,
+                "reason": "当前件数已是目标件数，未重复提交",
+            }
+
+        payload = {
+            "productId": product_id,
+            "sku": current.get("sku") or current.get("product_sku") or current.get("productSku") or "",
+            "skuId": current.get("sku_id") or current.get("skuId") or "",
+            "colourId": current_color_id,
+            "sizeId": current_size_id,
+            "buyNumber": quantity,
+            "is_img_custom": current.get("is_img_custom") or "",
+            "fabric_id": current.get("fabric_id") or "",
+            "order_detail_id": current.get("id") or order_detail_id,
+            "order_id": current.get("order_id"),
+            "isSave": 1,
+            "type": relation_type,
+            "lange": "zh",
+        }
+        response = self.post("/order/relateOrderDetailSave", payload)
+        return {
+            "orderDetailId": str(order_detail_id),
+            "sku": str(current.get("sku") or ""),
+            "fromQuantity": current_quantity,
+            "toQuantity": quantity,
+            "skipped": False,
+            "payload": payload,
+            "response": response,
+        }
+
+    def change_order_detail_quantities(self, items: list[dict[str, Any]], *, relation_type: int = 1) -> dict[str, Any]:
+        live_detail_ids: set[str] = set()
+        for status in (1, 2):
+            for row in self.iter_orders(status=status, limit=100):
+                for detail in row.get("detail") or []:
+                    if not isinstance(detail, dict):
+                        continue
+                    detail_id = detail.get("id") or detail.get("order_detail_id") or detail.get("item_id")
+                    if detail_id:
+                        live_detail_ids.add(str(detail_id))
+
+        results: list[dict[str, Any]] = []
+        failed: list[dict[str, Any]] = []
+        for item in items:
+            order_detail_id = str(item.get("order_detail_id") or "")
+            if not order_detail_id or order_detail_id not in live_detail_ids:
+                failed.append({
+                    "orderNo": item.get("order_no"),
+                    "sku": item.get("sku"),
+                    "orderDetailId": order_detail_id,
+                    "error": "订单状态已变化或明细不存在，已跳过",
+                })
+                continue
+            try:
+                result = self.change_order_detail_quantity(
+                    order_detail_id=order_detail_id,
+                    target_quantity=item.get("target_quantity"),
+                    relation_type=relation_type,
+                )
+                result["orderNo"] = item.get("order_no")
+                results.append(result)
+            except Exception as exc:  # noqa: BLE001
+                failed.append({
+                    "orderNo": item.get("order_no"),
+                    "sku": item.get("sku"),
+                    "orderDetailId": order_detail_id,
+                    "error": str(exc),
+                })
+        success_count = sum(1 for result in results if not result.get("skipped"))
+        skipped_count = sum(1 for result in results if result.get("skipped"))
+        return {
+            "message": f"VMI件数修改完成：提交成功 {success_count}，相同跳过 {skipped_count}，失败 {len(failed)}",
+            "successCount": success_count,
+            "skippedCount": skipped_count,
+            "failedCount": len(failed),
+            "results": results,
+            "failed": failed,
         }
 
     def filter_live_payment_size_targets(self, items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2691,6 +2823,7 @@ class LandwuGuiApp:
         self.payment_card_frames: dict[str, tk.Frame] = {}
         self.selected_payment_iid = ""
         self.size_editor_window: tk.Toplevel | None = None
+        self.quantity_editor_window: tk.Toplevel | None = None
         self.preview_window: tk.Toplevel | None = None
         self.settings_window: tk.Toplevel | None = None
         self.log_window: tk.Toplevel | None = None
@@ -4041,6 +4174,9 @@ class LandwuGuiApp:
     def _is_jit_row(self, row: dict[str, Any]) -> bool:
         return str(row.get("tag_name") or "").strip().upper() == "JIT"
 
+    def _is_vmi_row(self, row: dict[str, Any]) -> bool:
+        return str(row.get("tag_name") or "").strip().upper() == "VMI"
+
     def _set_edit_cards_empty(self, message: str) -> None:
         self.edit_card_frames.clear()
         self.edit_check_vars.clear()
@@ -4146,6 +4282,8 @@ class LandwuGuiApp:
             title_label = ttk.Label(header, text=title, font=("Microsoft YaHei UI", 9, "bold"), background="#FFFFFF")
             title_label.pack(side="left")
             self._bind_edit_card_widget(title_label, iid)
+            if self._is_vmi_row(row):
+                ttk.Button(header, text="修改件数", command=lambda r=row: self.open_vmi_quantity_editor(r), style="Ghost.TButton").pack(side="right", padx=(8, 0))
 
             meta = f"状态：{row.get('status_text') or '-'}    件数：{row.get('buy_number_count') or 0}    SKU数：{row.get('buy_type_count') or 0}    平台时间：{row.get('plattime') or '-'}"
             meta_label = ttk.Label(card, text=meta, background="#FFFFFF", foreground="#6C757D")
@@ -4299,6 +4437,8 @@ class LandwuGuiApp:
             title_label = ttk.Label(header, text=title, font=("Microsoft YaHei UI", 9, "bold"), background="#FFFFFF")
             title_label.pack(side="left")
             self._bind_payment_card_widget(title_label, iid)
+            if self._is_vmi_row(row):
+                ttk.Button(header, text="修改件数", command=lambda r=row: self.open_vmi_quantity_editor(r), style="Ghost.TButton").pack(side="right", padx=(8, 0))
             size_summary = self._format_payment_card_size_summary(row)
             size_label = ttk.Label(
                 header,
@@ -4632,6 +4772,108 @@ class LandwuGuiApp:
         if not views:
             submit_button.configure(state="disabled")
         submit_button.pack(side="right")
+
+    def _build_vmi_quantity_items(self, only_row: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        for status in (1, 2):
+            for row in self.order_rows_by_status_iid.get(status, {}).values():
+                if only_row is not None and row is not only_row and str(row.get("order_no") or "") != str(only_row.get("order_no") or ""):
+                    continue
+                if not self._is_vmi_row(row):
+                    continue
+                for detail in row.get("detail") or []:
+                    if not isinstance(detail, dict):
+                        continue
+                    detail_id = detail.get("id") or detail.get("order_detail_id") or detail.get("item_id")
+                    sku = normalize_sku(detail.get("sku") or detail.get("sku_id") or detail.get("skuId") or detail.get("productSku"))
+                    if not detail_id or not sku:
+                        continue
+                    current = detail.get("buy_number") or detail.get("buyNumber") or detail.get("quantity") or 1
+                    try:
+                        current = int(current)
+                    except (TypeError, ValueError):
+                        current = 1
+                    items.append({
+                        "order_no": str(row.get("order_no") or ""),
+                        "status": status,
+                        "sku": sku,
+                        "order_detail_id": str(detail_id),
+                        "current_quantity": current,
+                        "color": str(detail.get("colour") or detail.get("color") or "").strip(),
+                        "size": str(detail.get("size") or "").strip(),
+                    })
+        return items
+
+    def open_vmi_quantity_editor(self, row: dict[str, Any] | None = None) -> None:
+        if self.quantity_editor_window is not None:
+            try:
+                if self.quantity_editor_window.winfo_exists():
+                    self.quantity_editor_window.lift(); self.quantity_editor_window.focus_force(); return
+            except Exception:
+                self.quantity_editor_window = None
+        items = self._build_vmi_quantity_items(row)
+        window = tk.Toplevel(self.root)
+        self.quantity_editor_window = window
+        window.title("修改备货单下单数量")
+        window.geometry("820x620")
+        window.minsize(700, 420)
+        window.transient(self.root)
+        window.protocol("WM_DELETE_WINDOW", lambda: self._close_vmi_quantity_editor(window))
+        ttk.Label(window, text="商品数量                                      更改备货单数量", font=("Microsoft YaHei UI", 11, "bold")).pack(fill="x", padx=14, pady=(12, 6))
+        outer = ttk.Frame(window); outer.pack(fill="both", expand=True, padx=10, pady=4)
+        canvas = tk.Canvas(outer, highlightthickness=0); scrollbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        body = ttk.Frame(canvas); body.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=body, anchor="nw"); canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True); scrollbar.pack(side="right", fill="y")
+        entries: list[tuple[dict[str, Any], tk.Entry]] = []
+        last_order = None
+        for item in items:
+            order_no = str(item.get("order_no") or "-")
+            if order_no != last_order:
+                ttk.Label(body, text=f"订单号：{order_no}", font=("Microsoft YaHei UI", 10, "bold")).pack(fill="x", pady=(8, 4))
+                last_order = order_no
+            row_frame = ttk.Frame(body, padding=(8, 8)); row_frame.pack(fill="x", pady=2)
+            info = f"SKU：{item.get('sku') or '-'}    颜色：{item.get('color') or '-'}    尺码：{item.get('size') or '-'}    下单数量：{item.get('current_quantity')}"
+            ttk.Label(row_frame, text=info).pack(side="left", fill="x", expand=True)
+            entry = ttk.Entry(row_frame, width=10, justify="center")
+            entry.insert(0, str(item.get("current_quantity") or 1)); entry.pack(side="right", padx=(10, 4))
+            entries.append((item, entry))
+        footer = ttk.Frame(window); footer.pack(fill="x", padx=10, pady=10)
+        ttk.Button(footer, text="取消", command=lambda: self._close_vmi_quantity_editor(window)).pack(side="right", padx=5)
+        def submit():
+            targets = []
+            for item, entry in entries:
+                value = entry.get().strip()
+                try: quantity = int(value)
+                except ValueError: messagebox.showerror("数量错误", f"SKU {item.get('sku') or '-'} 的数量必须是整数"); return
+                if quantity < 1: messagebox.showerror("数量错误", "数量必须大于 0"); return
+                if quantity != item["current_quantity"]: targets.append({**item, "target_quantity": quantity})
+            if not targets: messagebox.showinfo("VMI件数", "没有需要提交的数量修改。"); return
+            if not messagebox.askyesno("确认修改", f"将提交 {len(targets)} 个 SKU 的数量修改，确定吗？"): return
+            def task(): return with_landwu_session(self._make_runtime_args(), lambda _session, client: client.change_order_detail_quantities(targets))
+            def done(payload):
+                message = payload.get("message") or "修改完成"
+                failed = payload.get("failed") or []
+                if failed:
+                    details = "\n".join(
+                        f"{item.get('orderNo') or '-'} / SKU {item.get('sku') or '-'}：{item.get('error') or '未知错误'}"
+                        for item in failed[:8]
+                    )
+                    if len(failed) > 8:
+                        details += f"\n……另有 {len(failed) - 8} 条失败"
+                    message += "\n\n失败原因：\n" + details
+                messagebox.showinfo("VMI件数", message)
+                self.refresh_summary()
+                self._close_vmi_quantity_editor(window)
+            self._run_task("修改 VMI 备货件数", task, on_success=done)
+        ttk.Button(footer, text="确认", command=submit, style="Accent.TButton").pack(side="right")
+
+    def _close_vmi_quantity_editor(self, window: tk.Toplevel | None = None) -> None:
+        target = window or self.quantity_editor_window
+        self.quantity_editor_window = None
+        if target is not None:
+            try: target.destroy()
+            except Exception: pass
 
     def _close_size_editor_window(self) -> None:
         window = self.size_editor_window

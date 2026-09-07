@@ -192,7 +192,7 @@ LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
 # 一格滚轮对应的滚动像素；Text/Canvas 用像素滚动，避免整张卡片一次跳过去
 SCROLL_PIXELS_PER_UNIT = 60
-APP_VERSION = "2026.09.04.3"
+APP_VERSION = "2026.09.06.1"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "macos/领物做单器.py"
@@ -1888,7 +1888,7 @@ class LandwuClient:
                 "reason": "当前尺码 ID 已是目标尺码 ID，未重复提交",
             }
         current_color = str(current.get("colour") or current.get("color") or "").strip()
-        current_color_id = str(current.get("colour_id") or current.get("color_id") or "").strip()
+        current_color_id = str(current.get("colour_id") or current.get("color_id") or current.get("colourId") or current.get("colorId") or "").strip()
         color_source = "orderDetail"
         if not current_color_id and current_color:
             current_color_id = self.find_named_option_id(color_map, current_color)
@@ -1929,6 +1929,138 @@ class LandwuClient:
             "colorSource": color_source,
             "payload": payload,
             "response": response,
+        }
+
+    def change_order_detail_quantity(
+        self,
+        *,
+        order_detail_id: int | str,
+        target_quantity: int | str,
+        relation_type: int = 1,
+    ) -> dict[str, Any]:
+        """仅修改订单明细的备货件数，其他关联信息全部沿用当前值。"""
+        try:
+            quantity = int(str(target_quantity).strip())
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"订单明细 {order_detail_id} 的件数不是有效整数") from exc
+        if quantity < 1:
+            raise RuntimeError(f"订单明细 {order_detail_id} 的件数必须大于 0")
+
+        edit_detail = self.get_order_edit_detail(order_detail_id)
+        current = edit_detail.get("data") or {}
+        product_id = edit_detail.get("product_id") or current.get("product_id")
+        color_map = edit_detail.get("color") or {}
+        size_map = edit_detail.get("size") or {}
+        current_quantity = current.get("buy_number") or current.get("buyNumber") or 1
+        try:
+            current_quantity = int(current_quantity)
+        except (TypeError, ValueError):
+            current_quantity = 1
+
+        current_color = str(current.get("colour") or current.get("color") or "").strip()
+        current_color_id = str(current.get("colour_id") or current.get("color_id") or current.get("colourId") or current.get("colorId") or "").strip()
+        if not current_color_id and current_color:
+            current_color_id = self.find_named_option_id(color_map, current_color)
+        if not current_color_id and current_color and product_id:
+            product_info = self.get_order_product_info(product_id)
+            current_color_id = self.find_named_option_id(product_info.get("color") or {}, current_color)
+        if not current_color_id:
+            raise RuntimeError(f"订单明细 {order_detail_id} 找不到原颜色ID，已阻止提交")
+
+        current_size_id = normalize_option_id(current.get("size_id") or current.get("sizeId") or first_option_id(edit_detail, current))
+        current_size = ""
+        if current_size_id:
+            current_size = str(find_option_by_id(size_map, current_size_id).get("name") or "").strip()
+        if not current_size:
+            current_size = str(current.get("size") or "").strip()
+            if current_size and not current_size_id:
+                current_size_id = self.find_named_option_id(size_map, current_size)
+        if not current_size_id:
+            raise RuntimeError(f"订单明细 {order_detail_id} 找不到原尺码ID，已阻止提交")
+
+        if current_quantity == quantity:
+            return {
+                "orderDetailId": str(order_detail_id),
+                "sku": str(current.get("sku") or ""),
+                "fromQuantity": current_quantity,
+                "toQuantity": quantity,
+                "skipped": True,
+                "reason": "当前件数已是目标件数，未重复提交",
+            }
+
+        payload = {
+            "productId": product_id,
+            "sku": current.get("sku") or current.get("product_sku") or current.get("productSku") or "",
+            "skuId": current.get("sku_id") or current.get("skuId") or "",
+            "colourId": current_color_id,
+            "sizeId": current_size_id,
+            "buyNumber": quantity,
+            "is_img_custom": current.get("is_img_custom") or "",
+            "fabric_id": current.get("fabric_id") or "",
+            "order_detail_id": current.get("id") or order_detail_id,
+            "order_id": current.get("order_id"),
+            "isSave": 1,
+            "type": relation_type,
+            "lange": "zh",
+        }
+        response = self.post("/order/relateOrderDetailSave", payload)
+        return {
+            "orderDetailId": str(order_detail_id),
+            "sku": str(current.get("sku") or ""),
+            "fromQuantity": current_quantity,
+            "toQuantity": quantity,
+            "skipped": False,
+            "payload": payload,
+            "response": response,
+        }
+
+    def change_order_detail_quantities(self, items: list[dict[str, Any]], *, relation_type: int = 1) -> dict[str, Any]:
+        live_detail_ids: set[str] = set()
+        for status in (1, 2):
+            for row in self.iter_orders(status=status, limit=100):
+                for detail in row.get("detail") or []:
+                    if not isinstance(detail, dict):
+                        continue
+                    detail_id = detail.get("id") or detail.get("order_detail_id") or detail.get("item_id")
+                    if detail_id:
+                        live_detail_ids.add(str(detail_id))
+
+        results: list[dict[str, Any]] = []
+        failed: list[dict[str, Any]] = []
+        for item in items:
+            order_detail_id = str(item.get("order_detail_id") or "")
+            if not order_detail_id or order_detail_id not in live_detail_ids:
+                failed.append({
+                    "orderNo": item.get("order_no"),
+                    "sku": item.get("sku"),
+                    "orderDetailId": order_detail_id,
+                    "error": "订单状态已变化或明细不存在，已跳过",
+                })
+                continue
+            try:
+                result = self.change_order_detail_quantity(
+                    order_detail_id=order_detail_id,
+                    target_quantity=item.get("target_quantity"),
+                    relation_type=relation_type,
+                )
+                result["orderNo"] = item.get("order_no")
+                results.append(result)
+            except Exception as exc:  # noqa: BLE001
+                failed.append({
+                    "orderNo": item.get("order_no"),
+                    "sku": item.get("sku"),
+                    "orderDetailId": order_detail_id,
+                    "error": str(exc),
+                })
+        success_count = sum(1 for result in results if not result.get("skipped"))
+        skipped_count = sum(1 for result in results if result.get("skipped"))
+        return {
+            "message": f"VMI件数修改完成：提交成功 {success_count}，相同跳过 {skipped_count}，失败 {len(failed)}",
+            "successCount": success_count,
+            "skippedCount": skipped_count,
+            "failedCount": len(failed),
+            "results": results,
+            "failed": failed,
         }
 
     def filter_live_payment_size_targets(self, items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2674,6 +2806,7 @@ class LandwuGuiApp:
         self.selected_payment_iid = ""
         self.payment_render_generation = 0
         self.size_editor_window: tk.Toplevel | None = None
+        self.quantity_editor_window: tk.Toplevel | None = None
         self.preview_window: tk.Toplevel | None = None
         self.settings_window: tk.Toplevel | None = None
         self.log_window: tk.Toplevel | None = None
@@ -4543,6 +4676,8 @@ class LandwuGuiApp:
             title_label = ttk.Label(header, text=title, font=("Microsoft YaHei UI", 9, "bold"), background="#FFFFFF")
             title_label.pack(side="left")
             self._bind_payment_card_widget(title_label, iid)
+            if self._is_vmi_row(row):
+                ttk.Button(header, text="修改件数", command=lambda r=row: self.open_vmi_quantity_editor(r), style="Ghost.TButton").pack(side="right", padx=(8, 0))
             size_summary = self._format_payment_card_size_summary(row)
             size_label = ttk.Label(
                 header,
@@ -4876,6 +5011,707 @@ class LandwuGuiApp:
         if not views:
             submit_button.configure(state="disabled")
         submit_button.pack(side="right")
+
+    def _is_vmi_row(self, row: dict[str, Any]) -> bool:
+        return str(row.get("tag_name") or "").strip().upper() == "VMI"
+
+    def _set_edit_cards_empty(self, message: str) -> None:
+        self.edit_card_frames.clear()
+        self.edit_check_vars.clear()
+        for child in self.edit_body.winfo_children():
+            child.destroy()
+        ttk.Label(
+            self.edit_body,
+            text=message,
+            foreground="#6C757D",
+            background="#F8F9FA",
+        ).pack(anchor="w", padx=12, pady=20)
+
+    def _toggle_edit_card(self, order_id: str) -> None:
+        if not order_id:
+            return
+        if order_id in self.unchecked_edit_order_ids:
+            self.unchecked_edit_order_ids.remove(order_id)
+        else:
+            self.unchecked_edit_order_ids.add(order_id)
+        self._refresh_edit_marks()
+        self._on_tree_select()
+
+    def _sync_edit_check_var(self, order_id: str, var: tk.BooleanVar) -> None:
+        expected = order_id not in self.unchecked_edit_order_ids
+        if var.get() != expected:
+            var.set(expected)
+
+    def _select_edit_card(self, iid: str) -> None:
+        if not iid:
+            return
+        self.selected_edit_iid = iid
+        self._refresh_edit_card_selection()
+        self._on_tree_select()
+
+    def _refresh_edit_card_selection(self) -> None:
+        selected = self.selected_edit_iid
+        for iid, frame in self.edit_card_frames.items():
+            color = "#0D6EFD" if iid == selected else "#E9ECEF"
+            frame.configure(highlightbackground=color, highlightcolor=color)
+
+    def _bind_edit_card_widget(self, widget: tk.Widget, iid: str) -> None:
+        widget.bind("<Button-1>", lambda _event, row_iid=iid: self._select_edit_card(row_iid))
+        widget.bind("<Button-3>", lambda event, row_iid=iid: self._show_edit_card_context_menu(event, row_iid))
+        if hasattr(self, "edit_canvas"):
+            self._bind_widget_mousewheel(widget, self.edit_canvas)
+
+    def _show_edit_card_context_menu(self, event, iid: str) -> str:
+        self._select_edit_card(iid)
+        menu = tk.Menu(self.root, tearoff=False)
+        menu.add_command(label="复制订单号", command=self.copy_selected_order_nos)
+        menu.tk_popup(event.x_root, event.y_root)
+        return "break"
+
+    def _populate_edit_cards(self, rows: list[dict[str, Any]]) -> None:
+        self.edit_card_frames.clear()
+        self.edit_check_vars.clear()
+        self.order_rows_by_status_iid[1].clear()
+        for child in self.edit_body.winfo_children():
+            child.destroy()
+        self.selected_edit_iid = ""
+
+        if not rows:
+            self._set_edit_cards_empty("当前没有待编辑订单。")
+            return
+
+        for index, row in enumerate(rows, start=1):
+            iid = f"1-row-{index}"
+            self.order_rows_by_status_iid[1][iid] = row
+            card = tk.Frame(
+                self.edit_body,
+                bg="#FFFFFF",
+                highlightbackground="#E9ECEF",
+                highlightcolor="#E9ECEF",
+                highlightthickness=1,
+                padx=8,
+                pady=6,
+            )
+            card.pack(fill="x", padx=8, pady=5)
+            self.edit_card_frames[iid] = card
+            self._bind_edit_card_widget(card, iid)
+
+            header = tk.Frame(card, bg="#FFFFFF")
+            header.pack(fill="x")
+            self._bind_edit_card_widget(header, iid)
+
+            order_id = str(row.get("order_id") or "")
+            is_jit = self._is_jit_row(row)
+            checked_var = tk.BooleanVar(value=bool(order_id and is_jit and order_id not in self.unchecked_edit_order_ids))
+            if order_id:
+                self.edit_check_vars[order_id] = checked_var
+            chk = tk.Checkbutton(
+                header,
+                variable=checked_var,
+                bg="#FFFFFF",
+                activebackground="#FFFFFF",
+                command=lambda oid=order_id: self._toggle_edit_card(oid),
+            )
+            if not is_jit or not order_id:
+                chk.configure(state="disabled")
+            chk.pack(side="left", padx=(0, 6))
+
+            title = f"{row.get('order_no') or '-'}  {row.get('tag_name') or '-'}  {row.get('shop_name') or '-'}"
+            title_label = ttk.Label(header, text=title, font=("Microsoft YaHei UI", 9, "bold"), background="#FFFFFF")
+            title_label.pack(side="left")
+            self._bind_edit_card_widget(title_label, iid)
+            if self._is_vmi_row(row):
+                ttk.Button(header, text="修改件数", command=lambda r=row: self.open_vmi_quantity_editor(r), style="Ghost.TButton").pack(side="right", padx=(8, 0))
+
+            meta = f"状态：{row.get('status_text') or '-'}    件数：{row.get('buy_number_count') or 0}    SKU数：{row.get('buy_type_count') or 0}    平台时间：{row.get('plattime') or '-'}"
+            meta_label = ttk.Label(card, text=meta, background="#FFFFFF", foreground="#6C757D")
+            meta_label.pack(anchor="w", pady=(4, 0))
+            self._bind_edit_card_widget(meta_label, iid)
+
+        if rows:
+            self.selected_edit_iid = "1-row-1"
+            self._refresh_edit_card_selection()
+
+    def _set_payment_cards_empty(self, message: str) -> None:
+        self.payment_card_images.clear()
+        self.payment_card_frames.clear()
+        self.payment_check_vars.clear()
+        for child in self.payment_body.winfo_children():
+            child.destroy()
+        ttk.Label(
+            self.payment_body,
+            text=message,
+            foreground="#6C757D",
+            background="#F8F9FA",
+        ).pack(anchor="w", padx=12, pady=20)
+
+    def _toggle_payment_card(self, order_id: str) -> None:
+        if not order_id:
+            return
+        if order_id in self.unchecked_payment_order_ids:
+            self.unchecked_payment_order_ids.remove(order_id)
+        else:
+            self.unchecked_payment_order_ids.add(order_id)
+        self._refresh_payment_marks()
+        self._on_tree_select()
+
+    def _sync_payment_check_var(self, order_id: str, var: tk.BooleanVar) -> None:
+        expected = order_id not in self.unchecked_payment_order_ids
+        if var.get() != expected:
+            var.set(expected)
+
+    def _select_payment_card(self, iid: str) -> None:
+        if not iid:
+            return
+        self.selected_payment_iid = iid
+        self._refresh_payment_card_selection()
+        self._on_tree_select()
+
+    def _refresh_payment_card_selection(self) -> None:
+        selected = self.selected_payment_iid
+        for iid, frame in self.payment_card_frames.items():
+            color = "#0D6EFD" if iid == selected else "#E9ECEF"
+            frame.configure(highlightbackground=color, highlightcolor=color)
+
+    def _bind_payment_card_widget(self, widget: tk.Widget, iid: str) -> None:
+        widget.bind("<Button-1>", lambda _event, row_iid=iid: self._select_payment_card(row_iid))
+        widget.bind("<Button-3>", lambda event, row_iid=iid: self._show_payment_card_context_menu(event, row_iid))
+        if hasattr(self, "payment_canvas"):
+            self._bind_widget_mousewheel(widget, self.payment_canvas)
+
+    def _show_payment_card_context_menu(self, event, iid: str) -> str:
+        self._select_payment_card(iid)
+        menu = tk.Menu(self.root, tearoff=False)
+        menu.add_command(label="复制订单号", command=self.copy_selected_order_nos)
+        menu.add_command(label="放大预览图片", command=self.preview_selected_payment_order_images)
+        menu.tk_popup(event.x_root, event.y_root)
+        return "break"
+
+    @staticmethod
+    def _format_payment_card_size_summary(row: dict[str, Any]) -> str:
+        values: list[str] = []
+        seen: set[str] = set()
+        for detail in row.get("detail") or []:
+            if not isinstance(detail, dict):
+                continue
+            size = str(detail.get("size") or detail.get("spec_size") or detail.get("goods_size") or "").strip()
+            if not size:
+                continue
+            sku = normalize_sku(detail.get("sku") or detail.get("productSku") or detail.get("product_sku") or detail.get("goods_sku"))
+            value = f"{sku}：{size}" if sku else size
+            if value not in seen:
+                values.append(value)
+                seen.add(value)
+        return "当前尺码：" + "；".join(values) if values else "当前尺码：未返回"
+
+    @staticmethod
+    def _generic_size_skus_from_payment_row(row: dict[str, Any]) -> list[str]:
+        skus: list[str] = []
+        seen: set[str] = set()
+        for detail in row.get("detail") or []:
+            if not isinstance(detail, dict):
+                continue
+            size = str(detail.get("size") or detail.get("spec_size") or detail.get("goods_size") or "").strip()
+            if size != "通用尺码":
+                continue
+            sku = normalize_sku(detail.get("sku") or detail.get("productSku") or detail.get("product_sku") or detail.get("goods_sku"))
+            value = sku or "未识别 SKU"
+            if value not in seen:
+                skus.append(value)
+                seen.add(value)
+        return skus
+
+    def _populate_payment_cards(self, rows: list[dict[str, Any]]) -> None:
+        self.payment_card_images.clear()
+        self.payment_card_frames.clear()
+        self.payment_check_vars.clear()
+        self.order_rows_by_status_iid[2].clear()
+        for child in self.payment_body.winfo_children():
+            child.destroy()
+        self.selected_payment_iid = ""
+
+        if not rows:
+            self._set_payment_cards_empty("当前没有待付款订单。")
+            return
+
+        for index, row in enumerate(rows, start=1):
+            iid = f"2-row-{index}"
+            self.order_rows_by_status_iid[2][iid] = row
+            card = tk.Frame(
+                self.payment_body,
+                bg="#FFFFFF",
+                highlightbackground="#E9ECEF",
+                highlightcolor="#E9ECEF",
+                highlightthickness=1,
+                padx=8,
+                pady=6,
+            )
+            card.pack(fill="x", padx=8, pady=6)
+            self.payment_card_frames[iid] = card
+
+            self._bind_payment_card_widget(card, iid)
+
+            header = tk.Frame(card, bg="#FFFFFF")
+            header.pack(fill="x")
+            self._bind_payment_card_widget(header, iid)
+
+            order_id = str(row.get("order_id") or "")
+            is_jit = self._is_jit_row(row)
+            checked_var = tk.BooleanVar(value=bool(order_id and is_jit and order_id not in self.unchecked_payment_order_ids))
+            if order_id:
+                self.payment_check_vars[order_id] = checked_var
+            chk = tk.Checkbutton(
+                header,
+                variable=checked_var,
+                bg="#FFFFFF",
+                activebackground="#FFFFFF",
+                command=lambda oid=order_id: self._toggle_payment_card(oid),
+            )
+            if not is_jit or not order_id:
+                chk.configure(state="disabled")
+            chk.pack(side="left", padx=(0, 6))
+
+            title = f"{row.get('order_no') or '-'}  {row.get('tag_name') or '-'}  {row.get('shop_name') or '-'}"
+            title_label = ttk.Label(header, text=title, font=("Microsoft YaHei UI", 9, "bold"), background="#FFFFFF")
+            title_label.pack(side="left")
+            self._bind_payment_card_widget(title_label, iid)
+            if self._is_vmi_row(row):
+                ttk.Button(header, text="修改件数", command=lambda r=row: self.open_vmi_quantity_editor(r), style="Ghost.TButton").pack(side="right", padx=(8, 0))
+            size_summary = self._format_payment_card_size_summary(row)
+            size_label = ttk.Label(
+                header,
+                text=size_summary,
+                font=("Microsoft YaHei UI", 9, "bold"),
+                background="#FFFFFF",
+                foreground="#B45309" if size_summary.endswith("未返回") else "#047857",
+            )
+            size_label.pack(side="left", padx=(18, 0))
+            self._bind_payment_card_widget(size_label, iid)
+            meta = f"状态：{row.get('status_text') or '-'}    件数：{row.get('buy_number_count') or 0}    SKU数：{row.get('buy_type_count') or 0}    平台时间：{row.get('plattime') or '-'}"
+            meta_label = ttk.Label(card, text=meta, background="#FFFFFF", foreground="#6C757D")
+            meta_label.pack(anchor="w", pady=(4, 4))
+            self._bind_payment_card_widget(meta_label, iid)
+
+            images = self._image_items_for_row(row)
+            if not images:
+                missing_label = ttk.Label(
+                    card,
+                    text=f"未找到服务器图片或本地已下载图片。目录：{self._current_output_dir()}",
+                    foreground="#B02A37",
+                    background="#FFFFFF",
+                )
+                missing_label.pack(anchor="w", pady=(2, 2))
+                self._bind_payment_card_widget(missing_label, iid)
+                continue
+
+            strip = tk.Frame(card, bg="#FFFFFF")
+            strip.pack(fill="x", pady=(4, 2))
+            self._bind_payment_card_widget(strip, iid)
+            image_row = tk.Frame(strip, bg="#FFFFFF")
+            image_row.pack(anchor="center")
+            self._bind_payment_card_widget(image_row, iid)
+            for item in images:
+                block = tk.Frame(image_row, bg="#FFFFFF", padx=8, pady=4)
+                block.pack(side="left", padx=14)
+                self._bind_payment_card_widget(block, iid)
+                sku_text = str(item.get("sku") or "").strip()
+                sku_label = ttk.Label(
+                    block,
+                    text=sku_text or Path(str(item.get("file") or "")).name,
+                    background="#FFFFFF",
+                    foreground="#495057",
+                )
+                sku_label.pack(anchor="w")
+                self._bind_payment_card_widget(sku_label, iid)
+                image_label = ttk.Label(block, text="图片加载中...", background="#FFFFFF", foreground="#6C757D")
+                image_label.pack(anchor="center", pady=(4, 0))
+                self._bind_payment_card_widget(image_label, iid)
+                image_label.configure(cursor="hand2")
+                image_label.bind(
+                    "<Button-1>",
+                    lambda _event, row_iid=iid: (self._select_payment_card(row_iid), self.preview_selected_payment_order_images()),
+                )
+                self._load_image_async(item, image_label, (620, 430), self.payment_card_images, trim=True, high_res=False)
+
+        if rows:
+            self.selected_payment_iid = "2-row-1"
+            self._refresh_payment_card_selection()
+
+    def _refresh_payment_marks(self) -> None:
+        for order_id, var in self.payment_check_vars.items():
+            self._sync_payment_check_var(order_id, var)
+
+    def _refresh_edit_marks(self) -> None:
+        for order_id, var in self.edit_check_vars.items():
+            self._sync_edit_check_var(order_id, var)
+
+    def bulk_uncheck_payment_orders(self) -> None:
+        target_order_nos = parse_order_no_set(self.bulk_uncheck_order_nos_var.get())
+        if not target_order_nos:
+            messagebox.showinfo("取消勾选", "请先输入 WB 订单号，多个用空格或逗号分隔。")
+            return
+
+        rows = self.order_rows_by_status_iid.get(2, {})
+        if not rows:
+            messagebox.showinfo("取消勾选", "当前待付款列表为空，请先刷新订单。")
+            return
+
+        matched_order_nos: list[str] = []
+        seen_jit_order_nos: set[str] = set()
+        for row in rows.values():
+            if not self._is_jit_row(row):
+                continue
+            order_no_key = normalize_order_no(row.get("order_no"))
+            if order_no_key:
+                seen_jit_order_nos.add(order_no_key)
+            if order_no_key in target_order_nos:
+                order_id = str(row.get("order_id") or "")
+                if order_id:
+                    self.unchecked_payment_order_ids.add(order_id)
+                    matched_order_nos.append(str(row.get("order_no") or ""))
+
+        if matched_order_nos:
+            if not messagebox.askyesno(
+                "确认取消勾选",
+                "\n".join(
+                    [
+                        f"检测到 {len(matched_order_nos)} 个待付款 JIT 可取消勾选。",
+                        f"订单：{self._format_order_no_preview(matched_order_nos)}",
+                        "",
+                        "确定把这些订单从本次支付里排除吗？",
+                    ]
+                ),
+            ):
+                return
+
+        self._refresh_payment_marks()
+        self._on_tree_select()
+
+        not_found = sorted(target_order_nos - seen_jit_order_nos)
+        message = f"已取消勾选 {len(matched_order_nos)} 个待付款 JIT。"
+        if not_found:
+            message += f"\n未在待付款 JIT 中找到：{', '.join(not_found[:10])}"
+            if len(not_found) > 10:
+                message += " ..."
+        messagebox.showinfo("取消勾选", message)
+
+    def _build_payment_size_items(self) -> list[dict[str, Any]]:
+        def first_value(source: dict[str, Any], keys: Iterable[str]) -> str:
+            for key in keys:
+                value = source.get(key)
+                if value not in (None, ""):
+                    return normalize_db_key(value)
+            return ""
+
+        items: list[dict[str, Any]] = []
+        for row in self.order_rows_by_status_iid.get(2, {}).values():
+            details = row.get("detail") or []
+            if not isinstance(details, list):
+                continue
+            for detail in details:
+                if not isinstance(detail, dict):
+                    continue
+                order_detail_id = detail.get("id") or detail.get("order_detail_id") or detail.get("item_id")
+                sku = normalize_sku(
+                    detail.get("sku")
+                    or detail.get("sku_id")
+                    or detail.get("skuId")
+                    or detail.get("sku_code")
+                    or detail.get("skuCode")
+                    or detail.get("productSku")
+                    or detail.get("product_sku")
+                    or detail.get("product_sku_id")
+                    or detail.get("goods_sku")
+                )
+                skc_id = first_value(
+                    detail,
+                    ("skc", "SKC", "skc_id", "skcId", "product_skc_id", "productSkcId", "product_skcId"),
+                )
+                product_id = first_value(
+                    detail,
+                    ("product_id", "productId", "spu_id", "spuId", "goods_id", "goodsId", "design_product_id"),
+                ) or first_value(row, ("product_id", "productId", "spu_id", "spuId", "goods_id", "goodsId"))
+                product_no = get_product_no_from_sources(detail, row)
+                match_candidates = []
+                # SKU 是唯一规格键，必须优先；SKC/SPU 仅作为兼容旧接口的回退。
+                for value in (sku, skc_id, product_id):
+                    if value and value not in match_candidates:
+                        match_candidates.append(value)
+                current_size = str(detail.get("size") or detail.get("spec_size") or detail.get("goods_size") or "").strip()
+                current_size_id = normalize_option_id(detail.get("size_id") or detail.get("sizeId"))
+                if not order_detail_id or not sku:
+                    continue
+                items.append(
+                    {
+                        "order_no": str(row.get("order_no") or ""),
+                        "order_id": str(row.get("order_id") or ""),
+                        "internal_order_id": str(row.get("id") or ""),
+                        "tag_name": str(row.get("tag_name") or ""),
+                        "shop_name": str(row.get("shop_name") or ""),
+                        "sku": sku,
+                        "skc_id": skc_id,
+                        "product_id": product_id,
+                        "product_no": product_no,
+                        "match_candidates": match_candidates,
+                        "order_detail_id": str(order_detail_id),
+                        "current_size": current_size,
+                        "current_size_id": current_size_id,
+                        "list_detail": detail,
+                    }
+                )
+        return items
+
+    def open_payment_size_editor(self) -> None:
+        if self.size_editor_window is not None:
+            try:
+                if self.size_editor_window.winfo_exists():
+                    self.size_editor_window.lift()
+                    self.size_editor_window.focus_force()
+                    return
+            except Exception:
+                self.size_editor_window = None
+
+        if self._active_status() != 2:
+            try:
+                self.notebook.select(1)
+            except Exception:
+                pass
+        items = self._build_payment_size_items()
+
+        window = tk.Toplevel(self.root)
+        self.size_editor_window = window
+        window.title("修改待付款订单成分（尺码）")
+        window.geometry("1050x650")
+        window.minsize(920, 520)
+        window.configure(background="#F8F9FA")
+        window.transient(self.root)
+        window.protocol("WM_DELETE_WINDOW", self._close_size_editor_window)
+
+        file_var = tk.StringVar(value=DEFAULT_COMPOSITION_XLSX)
+        status_var = tk.StringVar(
+            value=(
+                "当前无待付款订单，可先选择并保存成分数据库目录。"
+                if not items
+                else "可手填目标尺码；优先选择成分数据库目录后点击“开始匹配”。提交时使用“全部关联”。"
+            )
+        )
+        views: list[dict[str, Any]] = []
+
+        toolbar = ttk.Frame(window)
+        toolbar.pack(fill="x", padx=8, pady=8)
+        ttk.Label(toolbar, text="数据库目录").pack(side="left")
+        ttk.Entry(toolbar, textvariable=self.composition_db_folder_var, state="readonly").pack(
+            side="left", fill="x", expand=True, padx=6
+        )
+        ttk.Button(toolbar, text="选择数据库文件夹", command=lambda: self._choose_composition_db_folder(status_var), style="Ghost.TButton").pack(
+            side="left", padx=(0, 6)
+        )
+        ttk.Button(toolbar, text="开始匹配", command=lambda: self._apply_saved_db_composition(views, status_var), style="Match.TButton").pack(
+            side="left", padx=(2, 0)
+        )
+
+        legacy_toolbar = ttk.Frame(window)
+        legacy_toolbar.pack(fill="x", padx=8, pady=(0, 4))
+        ttk.Label(legacy_toolbar, text="旧版表格导入（通常不需要）").pack(side="left")
+        ttk.Entry(legacy_toolbar, textvariable=file_var).pack(side="left", fill="x", expand=True, padx=6)
+        ttk.Button(legacy_toolbar, text="选择表格", command=lambda: self._choose_composition_file(file_var), style="Ghost.TButton").pack(
+            side="left", padx=(0, 6)
+        )
+        ttk.Button(
+            legacy_toolbar,
+            text="导入表格快速填写",
+            command=lambda: self._apply_composition_to_size_views(file_var.get(), views, status_var),
+            style="Ghost.TButton",
+        ).pack(side="left")
+
+        status_label = ttk.Label(window, textvariable=status_var, background="#F8F9FA", foreground="#6C757D")
+        status_label.pack(fill="x", padx=8, pady=(0, 6))
+
+        col_widths = [40, 160, 140, 80, 100, 120, 100, 240]
+        header_texts = ["选", "订单号", "SKU", "标签", "原尺码", "目标尺码", "匹配状态", "成分"]
+
+        header = tk.Frame(window, bg="#E9ECEF", padx=6, pady=4)
+        header.pack(fill="x", padx=8)
+        for column, (text, width) in enumerate(zip(header_texts, col_widths)):
+            header.columnconfigure(column, minsize=width)
+            tk.Label(
+                header,
+                text=text,
+                anchor="w",
+                bg="#E9ECEF",
+                font=("Microsoft YaHei UI", 9, "bold"),
+            ).grid(row=0, column=column, sticky="w", padx=2)
+
+        canvas = tk.Canvas(window, bg="#F8F9FA", highlightthickness=0)
+        scrollbar = ttk.Scrollbar(window, orient="vertical", command=canvas.yview)
+        body = ttk.Frame(canvas)
+        body.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        body_window = canvas.create_window((0, 0), window=body, anchor="nw")
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(body_window, width=event.width))
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True, padx=(8, 0), pady=(0, 8))
+        scrollbar.pack(side="right", fill="y", padx=(0, 8), pady=(0, 8))
+        self._bind_widget_mousewheel(canvas, canvas)
+        self._bind_widget_mousewheel(body, canvas)
+
+        for index, item in enumerate(items, start=1):
+            row_bg = "#FFFFFF" if index % 2 else "#F8F9FA"
+            row_frame = tk.Frame(body, bg=row_bg, padx=6, pady=3)
+            row_frame.pack(fill="x")
+            self._bind_widget_mousewheel(row_frame, canvas)
+            for column, width in enumerate(col_widths):
+                row_frame.columnconfigure(column, minsize=width)
+
+            checked_var = tk.BooleanVar(value=False)
+            target_var = tk.StringVar(value="")
+            composition_var = tk.StringVar(value="")
+            note_var = tk.StringVar(value="待填写")
+            view = {
+                "item": item,
+                "checked": checked_var,
+                "target": target_var,
+                "composition": composition_var,
+                "note": note_var,
+            }
+            views.append(view)
+
+            check = tk.Checkbutton(row_frame, variable=checked_var, bg=row_bg, activebackground=row_bg)
+            check.grid(row=0, column=0, sticky="w", padx=2)
+            self._bind_widget_mousewheel(check, canvas)
+
+            for column, text in (
+                (1, item["order_no"]),
+                (2, item["sku"]),
+                (3, item["tag_name"]),
+                (4, item["current_size"] or "-"),
+            ):
+                label = tk.Label(row_frame, text=text, anchor="w", bg=row_bg)
+                label.grid(row=0, column=column, sticky="w", padx=2)
+                self._bind_widget_mousewheel(label, canvas)
+
+            combo = ttk.Combobox(row_frame, textvariable=target_var, values=SIZE_TARGET_OPTIONS, width=13, state="readonly")
+            combo.grid(row=0, column=5, sticky="w", padx=2)
+            combo.bind("<<ComboboxSelected>>", lambda _event, current_view=view: self._mark_size_view_after_manual_edit(current_view))
+            self._bind_widget_mousewheel(combo, canvas)
+
+            note_label = ttk.Label(row_frame, textvariable=note_var, background=row_bg, foreground="#6C757D")
+            note_label.grid(row=0, column=6, sticky="w", padx=2)
+            self._bind_widget_mousewheel(note_label, canvas)
+            composition_label = ttk.Label(row_frame, textvariable=composition_var, background=row_bg, foreground="#495057")
+            composition_label.grid(row=0, column=7, sticky="w", padx=2)
+            self._bind_widget_mousewheel(composition_label, canvas)
+
+        footer = ttk.Frame(window)
+        footer.pack(fill="x", padx=8, pady=(0, 8))
+        ttk.Button(footer, text="全选有目标尺码", command=lambda: self._set_size_views_checked(views, True)).pack(side="left")
+        ttk.Button(footer, text="全部取消", command=lambda: self._set_size_views_checked(views, False)).pack(side="left", padx=6)
+        submit_button = ttk.Button(footer, text="提交勾选修改")
+        submit_button.configure(command=lambda: self._submit_payment_size_changes(window, views, status_var, submit_button))
+        if not views:
+            submit_button.configure(state="disabled")
+        submit_button.pack(side="right")
+
+    def _build_vmi_quantity_items(self, only_row: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        for status in (1, 2):
+            for row in self.order_rows_by_status_iid.get(status, {}).values():
+                if only_row is not None and row is not only_row and str(row.get("order_no") or "") != str(only_row.get("order_no") or ""):
+                    continue
+                if not self._is_vmi_row(row):
+                    continue
+                for detail in row.get("detail") or []:
+                    if not isinstance(detail, dict):
+                        continue
+                    detail_id = detail.get("id") or detail.get("order_detail_id") or detail.get("item_id")
+                    sku = normalize_sku(detail.get("sku") or detail.get("sku_id") or detail.get("skuId") or detail.get("productSku"))
+                    if not detail_id or not sku:
+                        continue
+                    current = detail.get("buy_number") or detail.get("buyNumber") or detail.get("quantity") or 1
+                    try:
+                        current = int(current)
+                    except (TypeError, ValueError):
+                        current = 1
+                    items.append({
+                        "order_no": str(row.get("order_no") or ""),
+                        "status": status,
+                        "sku": sku,
+                        "order_detail_id": str(detail_id),
+                        "current_quantity": current,
+                        "color": str(detail.get("colour") or detail.get("color") or "").strip(),
+                        "size": str(detail.get("size") or "").strip(),
+                    })
+        return items
+
+    def open_vmi_quantity_editor(self, row: dict[str, Any] | None = None) -> None:
+        if self.quantity_editor_window is not None:
+            try:
+                if self.quantity_editor_window.winfo_exists():
+                    self.quantity_editor_window.lift(); self.quantity_editor_window.focus_force(); return
+            except Exception:
+                self.quantity_editor_window = None
+        items = self._build_vmi_quantity_items(row)
+        window = tk.Toplevel(self.root)
+        self.quantity_editor_window = window
+        window.title("修改备货单下单数量")
+        window.geometry("820x620")
+        window.minsize(700, 420)
+        window.transient(self.root)
+        window.protocol("WM_DELETE_WINDOW", lambda: self._close_vmi_quantity_editor(window))
+        ttk.Label(window, text="商品数量                                      更改备货单数量", font=("Microsoft YaHei UI", 11, "bold")).pack(fill="x", padx=14, pady=(12, 6))
+        outer = ttk.Frame(window); outer.pack(fill="both", expand=True, padx=10, pady=4)
+        canvas = tk.Canvas(outer, highlightthickness=0); scrollbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        body = ttk.Frame(canvas); body.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=body, anchor="nw"); canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True); scrollbar.pack(side="right", fill="y")
+        entries: list[tuple[dict[str, Any], tk.Entry]] = []
+        last_order = None
+        for item in items:
+            order_no = str(item.get("order_no") or "-")
+            if order_no != last_order:
+                ttk.Label(body, text=f"订单号：{order_no}", font=("Microsoft YaHei UI", 10, "bold")).pack(fill="x", pady=(8, 4))
+                last_order = order_no
+            row_frame = ttk.Frame(body, padding=(8, 8)); row_frame.pack(fill="x", pady=2)
+            info = f"SKU：{item.get('sku') or '-'}    颜色：{item.get('color') or '-'}    尺码：{item.get('size') or '-'}    下单数量：{item.get('current_quantity')}"
+            ttk.Label(row_frame, text=info).pack(side="left", fill="x", expand=True)
+            entry = ttk.Entry(row_frame, width=10, justify="center")
+            entry.insert(0, str(item.get("current_quantity") or 1)); entry.pack(side="right", padx=(10, 4))
+            entries.append((item, entry))
+        footer = ttk.Frame(window); footer.pack(fill="x", padx=10, pady=10)
+        ttk.Button(footer, text="取消", command=lambda: self._close_vmi_quantity_editor(window)).pack(side="right", padx=5)
+        def submit():
+            targets = []
+            for item, entry in entries:
+                value = entry.get().strip()
+                try: quantity = int(value)
+                except ValueError: messagebox.showerror("数量错误", f"SKU {item.get('sku') or '-'} 的数量必须是整数"); return
+                if quantity < 1: messagebox.showerror("数量错误", "数量必须大于 0"); return
+                if quantity != item["current_quantity"]: targets.append({**item, "target_quantity": quantity})
+            if not targets: messagebox.showinfo("VMI件数", "没有需要提交的数量修改。"); return
+            if not messagebox.askyesno("确认修改", f"将提交 {len(targets)} 个 SKU 的数量修改，确定吗？"): return
+            def task(): return with_landwu_session(self._make_runtime_args(), lambda _session, client: client.change_order_detail_quantities(targets))
+            def done(payload):
+                message = payload.get("message") or "修改完成"
+                failed = payload.get("failed") or []
+                if failed:
+                    details = "\n".join(
+                        f"{item.get('orderNo') or '-'} / SKU {item.get('sku') or '-'}：{item.get('error') or '未知错误'}"
+                        for item in failed[:8]
+                    )
+                    if len(failed) > 8:
+                        details += f"\n……另有 {len(failed) - 8} 条失败"
+                    message += "\n\n失败原因：\n" + details
+                messagebox.showinfo("VMI件数", message)
+                self.refresh_summary()
+                self._close_vmi_quantity_editor(window)
+            self._run_task("修改 VMI 备货件数", task, on_success=done)
+        ttk.Button(footer, text="确认", command=submit, style="Accent.TButton").pack(side="right")
+
+    def _close_vmi_quantity_editor(self, window: tk.Toplevel | None = None) -> None:
+        target = window or self.quantity_editor_window
+        self.quantity_editor_window = None
+        if target is not None:
+            try: target.destroy()
+            except Exception: pass
 
     def _close_size_editor_window(self) -> None:
         window = self.size_editor_window
