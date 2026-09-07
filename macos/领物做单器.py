@@ -620,6 +620,30 @@ SIZE_NAME_ALIASES = {
 }
 
 
+DISPLAY_COLOR_ALIASES = {
+    "black": "黑色", "white": "白色", "gray": "浅灰色", "grey": "浅灰色",
+    "blue": "蓝色", "navy": "藏青色", "royalblue": "宝蓝色", "khaki": "卡其色",
+    "red": "红色", "pink": "粉色", "green": "绿色", "yellow": "黄色",
+}
+
+DISPLAY_SIZE_ALIASES = {
+    "mian": "棉", "cotton": "棉", "dilun": "涤纶", "polyester": "涤纶",
+    "renmian": "人棉", "rayon": "人棉", "viscose": "人棉", "onesize": "通用尺码",
+    "one size": "通用尺码", "universal": "通用尺码", "freesize": "通用尺码",
+}
+
+
+def display_color_name(value: Any) -> str:
+    text = str(value or "").strip()
+    return DISPLAY_COLOR_ALIASES.get(text.lower().replace(" ", ""), text)
+
+
+def display_size_name(value: Any) -> str:
+    text = str(value or "").strip()
+    return DISPLAY_SIZE_ALIASES.get(text.lower(), text)
+
+
+
 def normalize_option_id(value: Any) -> str:
     return normalize_db_key(value)
 
@@ -5637,8 +5661,8 @@ class LandwuGuiApp:
                         "sku": sku,
                         "order_detail_id": str(detail_id),
                         "current_quantity": current,
-                        "color": str(detail.get("colour") or detail.get("color") or "").strip(),
-                        "size": str(detail.get("size") or "").strip(),
+                        "color": display_color_name(detail.get("colour") or detail.get("color") or detail.get("colour_name") or detail.get("color_name") or ""),
+                        "size": display_size_name(detail.get("size") or detail.get("spec_size") or detail.get("goods_size") or ""),
                     })
         return items
 
