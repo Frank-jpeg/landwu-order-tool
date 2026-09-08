@@ -182,7 +182,7 @@ LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
 # 触控板精密滚动累计多少像素算一格滚轮
 SCROLL_PIXELS_PER_UNIT = 60
-APP_VERSION = "2026.09.08.1"
+APP_VERSION = "2026.09.08.2"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "领物做单器.pyw"
@@ -762,7 +762,7 @@ def find_option_by_id(options: Any, option_id: Any) -> dict[str, Any]:
 
 
 def format_money(value: Any) -> str:
-    raw = str(value or "").strip()
+    raw = "" if value is None else str(value).strip()
     if not raw:
         return "-"
     try:
@@ -772,7 +772,7 @@ def format_money(value: Any) -> str:
 
 
 def parse_money_amount(value: Any) -> float | None:
-    text = str(value or "").strip()
+    text = "" if value is None else str(value).strip()
     if not text:
         return None
     text = text.replace(",", "").replace("￥", "").replace("¥", "")
@@ -2828,6 +2828,8 @@ class LandwuGuiApp:
         self.auto_refresh_status_var = tk.StringVar(value="自动刷新关闭")
         self.summary_line_var = tk.StringVar(value="账号：-    待编辑：0    JIT：0    VMI：0    待付款 JIT：0    已支付：0")
         self.balance_var = tk.StringVar(value="-")
+        self.balance_notice_var = tk.StringVar(value="")
+        self.balance_notice_label: ttk.Label | None = None
         self.toolbar_title_var = tk.StringVar(value="待编辑操作")
         self.waybill_failed_card: tk.Frame | None = None
         self.waybill_failed_title_label: ttk.Label | None = None
@@ -2975,6 +2977,12 @@ class LandwuGuiApp:
         self.buttons.append(refresh_btn)
         ttk.Button(header, text="设置", command=self.open_settings_window, style="Ghost.TButton").grid(row=0, column=4, sticky="e", padx=(6, 0))
         ttk.Button(header, text="日志", command=self.open_log_window, style="Ghost.TButton").grid(row=0, column=5, sticky="e", padx=(6, 0))
+        self.balance_notice_label = ttk.Label(
+            header, textvariable=self.balance_notice_var,
+            background="#FFFFFF", foreground="#DC3545", font=("Microsoft YaHei UI", 9, "bold"),
+        )
+        self.balance_notice_label.grid(row=1, column=0, columnspan=6, sticky="w", pady=(4, 0))
+        self.balance_notice_label.grid_remove()
 
         action_frame = ttk.Frame(self.root, style="Toolbar.TFrame", padding=(10, 7))
         action_frame.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 4))
@@ -4143,18 +4151,20 @@ class LandwuGuiApp:
 
     def _check_low_balance(self, raw_balance: Any, balance_text: str) -> None:
         amount = parse_money_amount(raw_balance)
-        if amount is None:
-            return
-        if amount >= LOW_BALANCE_ALERT_THRESHOLD:
+        if amount is None or amount >= LOW_BALANCE_ALERT_THRESHOLD:
+            self.balance_notice_var.set("")
+            if self.balance_notice_label is not None:
+                self.balance_notice_label.grid_remove()
             self.low_balance_alerted = False
             return
-        message = f"下单余额低于 {LOW_BALANCE_ALERT_THRESHOLD:.0f} 元：当前 ¥ {balance_text}"
-        self.status_var.set(message)
+        message = f"下单余额 ¥ {balance_text}，低于 {LOW_BALANCE_ALERT_THRESHOLD:.0f} 元"
+        self.balance_notice_var.set(message)
+        if self.balance_notice_label is not None:
+            self.balance_notice_label.grid()
         if self.low_balance_alerted:
             return
         self.low_balance_alerted = True
         self._log(message)
-        messagebox.showwarning("下单余额不足提醒", message)
 
     def _apply_waybill_failed_style(self, count: int) -> None:
         failed = count > 0
@@ -5739,6 +5749,7 @@ class LandwuGuiApp:
             self.factory_var.set(str(payload.get("factoryId") or "-"))
             balance_text = format_money(payload.get("balance"))
             self.balance_var.set(f"¥ {balance_text}" if balance_text != "-" else "-")
+            self._check_low_balance(payload.get("balance"), balance_text)
 
         self._run_task("查看登录态", task, on_success=on_success)
 
