@@ -182,7 +182,7 @@ LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
 # 触控板精密滚动累计多少像素算一格滚轮
 SCROLL_PIXELS_PER_UNIT = 60
-APP_VERSION = "2026.09.07.2"
+APP_VERSION = "2026.09.08.1"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "领物做单器.pyw"
@@ -4211,6 +4211,68 @@ class LandwuGuiApp:
     def _is_vmi_row(self, row: dict[str, Any]) -> bool:
         return str(row.get("tag_name") or "").strip().upper() == "VMI"
 
+    @staticmethod
+    def _vmi_quantity_display_rows(row: dict[str, Any]) -> list[tuple[str, str, str, str]]:
+        values = []
+        for detail in row.get("detail") or []:
+            if not isinstance(detail, dict):
+                continue
+            sku = normalize_sku(
+                detail.get("sku") or detail.get("sku_id") or detail.get("skuId")
+                or detail.get("productSku") or detail.get("product_sku") or detail.get("goods_sku")
+            )
+            color = display_color_name(
+                detail.get("colour") or detail.get("color") or detail.get("colour_name") or detail.get("color_name")
+            )
+            size = display_size_name(detail.get("size") or detail.get("spec_size") or detail.get("goods_size"))
+            # 数量为 0 时照实显示；缺失或无效时不擅自补成 1 件。
+            quantity = next(
+                (detail[key] for key in ("buy_number", "buyNumber", "quantity") if detail.get(key) not in (None, "")),
+                None,
+            )
+            try:
+                quantity = int(str(quantity).strip())
+                quantity_text = f"{quantity} 件" if quantity >= 0 else "未返回"
+            except (TypeError, ValueError):
+                quantity_text = "未返回"
+            values.append((sku or "-", color or "-", size or "-", quantity_text))
+        return values
+
+    def _add_vmi_quantity_details(self, card: tk.Frame, row: dict[str, Any], iid: str, status: int) -> None:
+        if not self._is_vmi_row(row):
+            return
+        bind_widget = self._bind_edit_card_widget if status == 1 else self._bind_payment_card_widget
+        rows = self._vmi_quantity_display_rows(row)
+        if not rows:
+            label = ttk.Label(card, text="暂无 SKU 数量明细", background="#FFFFFF", foreground="#6C757D")
+            label.pack(anchor="w", pady=(8, 2))
+            bind_widget(label, iid)
+            return
+        table = tk.Frame(card, bg="#FFFFFF")
+        table.pack(fill="x", pady=(8, 2))
+        bind_widget(table, iid)
+        for column, (weight, minimum) in enumerate(((3, 180), (2, 120), (3, 160), (0, 100))):
+            table.columnconfigure(column, weight=weight, minsize=minimum)
+        for row_index, values in enumerate([("SKU", "颜色", "尺码", "下单数量"), *rows]):
+            heading = row_index == 0
+            background = "#F1F3F5" if heading else ("#FFFFFF" if row_index % 2 else "#F8F9FA")
+            for column, value in enumerate(values):
+                quantity_cell = column == 3 and not heading
+                label = ttk.Label(
+                    table, text=value, width=1, padding=(10, 5),
+                    anchor="e" if column == 3 else "w",
+                    background=background,
+                    foreground="#0D6EFD" if quantity_cell and value != "未返回" else "#52606D",
+                    font=("Microsoft YaHei UI", 10 if quantity_cell else 9, "bold" if heading or quantity_cell else "normal"),
+                )
+                label.grid(row=row_index, column=column, sticky="nsew")
+                if column != 3:
+                    label.bind(
+                        "<Configure>",
+                        lambda event, target=label: target.configure(wraplength=max(40, event.width - 20)),
+                    )
+                bind_widget(label, iid)
+
     def _set_edit_cards_empty(self, message: str) -> None:
         self.edit_card_frames.clear()
         self.edit_check_vars.clear()
@@ -4323,6 +4385,7 @@ class LandwuGuiApp:
             meta_label = ttk.Label(card, text=meta, background="#FFFFFF", foreground="#6C757D")
             meta_label.pack(anchor="w", pady=(4, 0))
             self._bind_edit_card_widget(meta_label, iid)
+            self._add_vmi_quantity_details(card, row, iid, 1)
 
         if rows:
             self.selected_edit_iid = "1-row-1"
@@ -4487,6 +4550,7 @@ class LandwuGuiApp:
             meta_label = ttk.Label(card, text=meta, background="#FFFFFF", foreground="#6C757D")
             meta_label.pack(anchor="w", pady=(4, 4))
             self._bind_payment_card_widget(meta_label, iid)
+            self._add_vmi_quantity_details(card, row, iid, 2)
 
             images = self._image_items_for_row(row)
             if not images:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+import re
 from types import SimpleNamespace
 import tkinter as tk
 from tkinter import ttk
@@ -13,28 +14,39 @@ import unittest
 SOURCE_PATH = Path(__file__).resolve().parents[1] / "macos" / "领物做单器.py"
 
 
-def load_gui_class():
-    module = ast.parse(SOURCE_PATH.read_text(encoding="utf-8-sig"))
+def load_gui_class(source_path=None):
+    source_path = source_path or SOURCE_PATH
+    module = ast.parse(source_path.read_text(encoding="utf-8-sig"))
     gui = next(node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "LandwuGuiApp")
     constants = [
         node for node in module.body
         if isinstance(node, ast.Assign)
-        and any(isinstance(target, ast.Name) and target.id == "SCROLL_PIXELS_PER_UNIT" for target in node.targets)
+        and any(
+            isinstance(target, ast.Name)
+            and target.id in {"SCROLL_PIXELS_PER_UNIT", "DISPLAY_COLOR_ALIASES", "DISPLAY_SIZE_ALIASES"}
+            for target in node.targets
+        )
+    ]
+    display_functions = [
+        node for node in module.body if isinstance(node, ast.FunctionDef)
+        and node.name in {"normalize_sku", "display_color_name", "display_size_name"}
     ]
     # 保留完整类及方法定义顺序，确保测试的是运行时实际生效的渲染方法。
     isolated = ast.Module(
-        body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), *constants, gui],
+        body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), *constants, *display_functions, gui],
         type_ignores=[],
     )
-    namespace = {"tk": tk, "ttk": ttk, "Path": Path}
-    exec(compile(ast.fix_missing_locations(isolated), str(SOURCE_PATH), "exec"), namespace)
+    namespace = {"tk": tk, "ttk": ttk, "Path": Path, "re": re}
+    exec(compile(ast.fix_missing_locations(isolated), str(source_path), "exec"), namespace)
     return namespace["LandwuGuiApp"]
 
 
-class MacCardScrollingTests(unittest.TestCase):
+class CardGuiTestCase(unittest.TestCase):
+    source_path = None
+
     @classmethod
     def setUpClass(cls):
-        cls.gui_class = load_gui_class()
+        cls.gui_class = load_gui_class(cls.source_path)
 
     def setUp(self):
         try:
@@ -118,6 +130,8 @@ class MacCardScrollingTests(unittest.TestCase):
         self.assertGreater(last_bottom, self.viewport.winfo_rooty())
         self.assertLessEqual(last_bottom, self.viewport.winfo_rooty() + self.viewport.winfo_height())
 
+
+class MacCardScrollingTests(CardGuiTestCase):
     def test_four_payment_orders_scroll_after_images_load_and_resize(self):
         self.create_view(2)
         self.populate(4)
