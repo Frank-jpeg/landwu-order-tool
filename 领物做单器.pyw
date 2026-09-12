@@ -182,7 +182,7 @@ LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
 # 触控板精密滚动累计多少像素算一格滚轮
 SCROLL_PIXELS_PER_UNIT = 60
-APP_VERSION = "2026.09.08.2"
+APP_VERSION = "2026.09.08.3"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "领物做单器.pyw"
@@ -1929,7 +1929,7 @@ class LandwuClient:
             "productId": product_id,
             "colourId": current_color_id,
             "sizeId": target_size_id,
-            "buyNumber": current.get("buy_number") or 1,
+            "buyNumber": next((current[key] for key in ("buy_number", "buyNumber", "quantity") if current.get(key) not in (None, "")), 1),
             "is_img_custom": current.get("is_img_custom") or "",
             "fabric_id": current.get("fabric_id") or "",
             "order_detail_id": current.get("id") or order_detail_id,
@@ -1955,31 +1955,57 @@ class LandwuClient:
             "response": response,
         }
 
+    def delete_order_detail(self, *, order_id: int | str, order_detail_id: int | str, lange: str = "zh") -> dict[str, Any]:
+        """删除订单明细；领物页面将颜色数量改为 0 时使用此接口。"""
+        order_id_text = str(order_id or "").strip()
+        detail_id_text = str(order_detail_id or "").strip()
+        if not order_id_text or not detail_id_text:
+            raise RuntimeError("删除订单明细缺少订单号或明细ID")
+        return self.get("/order/delOrderDetail", {
+            "order_id": order_id_text,
+            "order_detail_id": detail_id_text,
+            "lange": lange,
+        })
+
     def change_order_detail_quantity(
         self,
         *,
         order_detail_id: int | str,
         target_quantity: int | str,
         relation_type: int = 1,
+        order_id: int | str | None = None,
     ) -> dict[str, Any]:
         """仅修改订单明细的备货件数，其他关联信息全部沿用当前值。"""
         try:
             quantity = int(str(target_quantity).strip())
         except (TypeError, ValueError) as exc:
             raise RuntimeError(f"订单明细 {order_detail_id} 的件数不是有效整数") from exc
-        if quantity < 1:
-            raise RuntimeError(f"订单明细 {order_detail_id} 的件数必须大于 0")
+        if quantity < 0:
+            raise RuntimeError(f"订单明细 {order_detail_id} 的件数不能小于 0")
 
         edit_detail = self.get_order_edit_detail(order_detail_id)
         current = edit_detail.get("data") or {}
         product_id = edit_detail.get("product_id") or current.get("product_id")
         color_map = edit_detail.get("color") or {}
         size_map = edit_detail.get("size") or {}
-        current_quantity = current.get("buy_number") or current.get("buyNumber") or 1
+        current_quantity = next((current[key] for key in ("buy_number", "buyNumber", "quantity") if current.get(key) not in (None, "")), 1)
         try:
             current_quantity = int(current_quantity)
         except (TypeError, ValueError):
             current_quantity = 1
+
+        if quantity == 0:
+            order_id = order_id or current.get("order_id") or edit_detail.get("order_id") or current.get("order_no")
+            response = self.delete_order_detail(order_id=order_id, order_detail_id=order_detail_id)
+            return {
+                "orderDetailId": str(order_detail_id),
+                "sku": str(current.get("sku") or ""),
+                "fromQuantity": current_quantity,
+                "toQuantity": 0,
+                "deleted": True,
+                "payload": {"order_id": order_id, "order_detail_id": str(order_detail_id), "lange": "zh"},
+                "response": response,
+            }
 
         current_color = str(current.get("colour") or current.get("color") or "").strip()
         current_color_id = str(current.get("colour_id") or current.get("color_id") or current.get("colourId") or current.get("colorId") or "").strip()
@@ -2066,6 +2092,7 @@ class LandwuClient:
                     order_detail_id=order_detail_id,
                     target_quantity=item.get("target_quantity"),
                     relation_type=relation_type,
+                    order_id=item.get("order_no"),
                 )
                 result["orderNo"] = item.get("order_no")
                 results.append(result)
@@ -4896,7 +4923,7 @@ class LandwuGuiApp:
                     sku = normalize_sku(detail.get("sku") or detail.get("sku_id") or detail.get("skuId") or detail.get("productSku"))
                     if not detail_id or not sku:
                         continue
-                    current = detail.get("buy_number") or detail.get("buyNumber") or detail.get("quantity") or 1
+                    current = next((detail[key] for key in ("buy_number", "buyNumber", "quantity") if detail.get(key) not in (None, "")), 1)
                     try:
                         current = int(current)
                     except (TypeError, ValueError):
@@ -4955,7 +4982,7 @@ class LandwuGuiApp:
             info = f"SKU：{item.get('sku') or '-'}    颜色：{item.get('color') or '-'}    尺码：{item.get('size') or '-'}    下单数量：{item.get('current_quantity')}"
             ttk.Label(row_frame, text=info).pack(side="left", fill="x", expand=True)
             entry = ttk.Entry(row_frame, width=10, justify="center")
-            entry.insert(0, str(item.get("current_quantity") or 1)); entry.pack(side="right", padx=(10, 4))
+            entry.insert(0, str(item.get("current_quantity", 0))); entry.pack(side="right", padx=(10, 4))
             entries.append((item, entry))
         footer = ttk.Frame(window); footer.pack(fill="x", padx=10, pady=10)
         ttk.Button(footer, text="取消", command=lambda: self._close_vmi_quantity_editor(window)).pack(side="right", padx=5)
@@ -4965,7 +4992,7 @@ class LandwuGuiApp:
                 value = entry.get().strip()
                 try: quantity = int(value)
                 except ValueError: messagebox.showerror("数量错误", f"SKU {item.get('sku') or '-'} 的数量必须是整数"); return
-                if quantity < 1: messagebox.showerror("数量错误", "数量必须大于 0"); return
+                if quantity < 0: messagebox.showerror("数量错误", "数量不能小于 0"); return
                 if quantity != item["current_quantity"]: targets.append({**item, "target_quantity": quantity})
             if not targets: messagebox.showinfo("VMI件数", "没有需要提交的数量修改。"); return
             if not messagebox.askyesno("确认修改", f"将提交 {len(targets)} 个 SKU 的数量修改，确定吗？"): return
