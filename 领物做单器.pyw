@@ -182,7 +182,7 @@ LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
 # 触控板精密滚动累计多少像素算一格滚轮
 SCROLL_PIXELS_PER_UNIT = 60
-APP_VERSION = "2026.09.08.3"
+APP_VERSION = "2026.09.15.1"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "领物做单器.pyw"
@@ -568,6 +568,58 @@ def normalize_db_key(value: Any) -> str:
         except InvalidOperation:
             return text
     return re.sub(r"\s+", "", text)
+
+
+# 导出表常把同一 SPU 下的多个 SKU/SKC/SPU 横向写进同一个单元格（如 6 个颜色拼成
+# “id1；id2；…；id6”），用这些符号拆开后再逐个注册。
+COMPOSITION_DB_CELL_SPLIT_PATTERN = re.compile(r"[；;，,\s]+")
+# 规格单元格只按多值分隔符拆，避免把“颜色:卡其 / 尺码:通用尺码”拆散。
+COMPOSITION_DB_SPEC_SPLIT_PATTERN = re.compile(r"[；;]+")
+COMPOSITION_DB_SPEC_COLOR_PATTERN = re.compile(r"颜色\s*[:：]\s*([^/／;；|]+)")
+
+
+def split_db_cell_values(value: Any) -> list[tuple[str, int]]:
+    """把数据库单元格拆成 (候选键, 单元格内序号) 列表。
+
+    单元格里可能并排写着一个 SPU 的多个 ID，整串比较会永远匹配不到订单里的单个
+    SKU_ID，所以拆出的每一项都要注册。序号用于按位置取颜色；“整串去空白”的形式
+    也会追加一条（序号 -1），保证一行一个 ID 的旧表格行为完全不变。
+    """
+    if value is None or isinstance(value, bool):
+        return []
+    if isinstance(value, (int, float)):
+        key = normalize_db_key(value)
+        return [(key, 0)] if key else []
+    text = str(value).replace("\t", " ").replace("\u3000", " ").strip()
+    if not text:
+        return []
+    values: list[tuple[str, int]] = []
+    parts = [part.strip() for part in COMPOSITION_DB_CELL_SPLIT_PATTERN.split(text) if part.strip()]
+    for position, part in enumerate(parts):
+        key = normalize_db_key(part)
+        if key and all(key != existing for existing, _ in values):
+            values.append((key, position))
+    whole = normalize_db_key(text)
+    if whole and all(whole != existing for existing, _ in values):
+        values.append((whole, -1))
+    return values
+
+
+def split_db_spec_values(value: Any) -> list[str]:
+    if value is None:
+        return []
+    text = str(value).strip()
+    if not text:
+        return []
+    return [part.strip() for part in COMPOSITION_DB_SPEC_SPLIT_PATTERN.split(text) if part.strip()]
+
+
+def db_cell_spec_color(spec_values: list[str], value_count: int, position: int) -> str:
+    """单元格内 ID 与规格严格一一对应时取出该位置的颜色；对不齐就不猜。"""
+    if value_count <= 1 or len(spec_values) != value_count or not 0 <= position < value_count:
+        return ""
+    match = COMPOSITION_DB_SPEC_COLOR_PATTERN.search(spec_values[position])
+    return match.group(1).strip() if match else ""
 
 
 OPTION_ID_FIELDS = (
@@ -1041,22 +1093,35 @@ def load_composition_db_mapping(query_values: Iterable[Any], db_folder: Path = C
         if ingredient_col < 0 and material_col < 0:
             skipped_files.append(db_path.name)
             continue
+        spec_col = find_table_column(headers, ["SKU规格", "规格"])
         used_files += 1
         for row in rows:
             scanned_rows += 1
+            # 单元格里可能并排多个 ID：先收集整行真正命中的键，再统一注册。
+            cell_hits: dict[str, tuple[str, int, int]] = {}
             for field, index in join_cols:
-                key = normalize_db_key(row[index] if index < len(row) else "")
-                if not key or key not in query_keys or key in mapping:
-                    continue
-                composition = choose_db_composition(row, ingredient_col, material_col)
-                target_size = infer_size_from_composition(composition)
-                mapping[key] = {
+                cell_values = split_db_cell_values(row[index] if index < len(row) else "")
+                item_count = sum(1 for _, position in cell_values if position >= 0)
+                for key, position in cell_values:
+                    if key in query_keys and key not in mapping and key not in cell_hits:
+                        cell_hits[key] = (field, position, item_count)
+            if not cell_hits:
+                continue
+            composition = choose_db_composition(row, ingredient_col, material_col)
+            target_size = infer_size_from_composition(composition)
+            spec_values = split_db_spec_values(row[spec_col] if 0 <= spec_col < len(row) else "")
+            for key, (field, position, value_count) in cell_hits.items():
+                record: dict[str, Any] = {
                     "query": key,
                     "composition": composition or "未匹配",
                     "target_size": target_size,
                     "db_field": field,
                     "db_file": db_path.name,
                 }
+                color = db_cell_spec_color(spec_values, value_count, position)
+                if color:
+                    record["spec_color"] = color
+                mapping[key] = record
     return {
         "mapping": mapping,
         "dbFolder": str(db_folder),
@@ -5162,7 +5227,12 @@ class LandwuGuiApp:
                 result["note"] = "相同跳过（尺码ID）" if current_size_id and target_size_id else "相同跳过"
                 same += 1
             else:
-                result["note"] = str(record.get("db_field") or "已匹配")
+                note = str(record.get("db_field") or "已匹配")
+                spec_color = str(record.get("spec_color") or "")
+                if spec_color:
+                    # 一格多 SKU 的表格按位置取到颜色，标注出来方便核对没串色。
+                    note = f"{note}（{spec_color}）"
+                result["note"] = note
                 result["checked"] = True
                 targets.append(
                     {
