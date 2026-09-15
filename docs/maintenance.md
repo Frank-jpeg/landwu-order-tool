@@ -10,6 +10,7 @@
 | [macos/领物做单器.py](../macos/领物做单器.py) | macOS 桌面程序及命令行入口 |
 | [test_macos_card_scrolling.py](../tests/test_macos_card_scrolling.py) | Mac 源码的卡片滚动验证，以及共用的隔离 GUI 测试工具 |
 | [test_vmi_quantity_details.py](../tests/test_vmi_quantity_details.py) | Windows/macOS 的 VMI 数量明细验证 |
+| [test_composition_db_matching.py](../tests/test_composition_db_matching.py) | Windows/macOS 的成分数据库匹配验证（多值单元格拆分、颜色对齐、旧行为回归） |
 | [build-windows-exe.yml](../.github/workflows/build-windows-exe.yml) | PyInstaller 单文件 EXE 构建与标签发布 |
 
 桌面源码在 `main`，手机 APK、手机脚本及手机成分数据库在 `codex/landwu-mobile`。桌面界面调整不需要同步到手机分支；共享业务规则变化时单独评估手机端。
@@ -39,6 +40,19 @@ Mac 的 `_scroll_target_pixels()` 将 Canvas 的 `yscrollincrement` 设为 1，�
 
 低于阈值时更新 `balance_notice_var` 并显示顶部红色标签；达到阈值或余额不可解析时清空、隐藏标签。余额 0 是有效值。该提示不调用消息框，也不覆盖底部操作进度；一次连续低余额状态只记录一次日志。
 
+## 成分数据库匹配
+
+`load_composition_db_mapping()` 在两端的实现一致：按 `COMPOSITION_DB_JOIN_FIELDS`（`SKU_ID`、`SKU`、`SKC_ID`、`SPU_ID`）逐列取值，与订单侧 `match_candidates`（`sku` → `skc_id` → `product_id`）比对，命中后取成分（空则回退材质）并推断目标尺码。订单侧查询键由 `_build_payment_size_items()` 组装。
+
+供应商导出表常把同一 SPU 下多个颜色的 SKU 写进同一个单元格（如 6 个 ID 用 `；` 拼接），只做整串比较会让这些行永远匹配不到，待付款订单显示“未匹配”。因此：
+
+- `split_db_cell_values()` 按 `[；;，,\s]+` 拆开单元格并逐项注册，同时保留“整串去空白”形式（序号 -1），一行一个 ID 的旧表格行为完全不变。
+- `load_composition_db_mapping()` 先把整行命中的键收集到 `cell_hits` 再统一注册，维持“首个命中者生效”的语义；成分与目标尺码每行只解析一次。
+- `split_db_spec_values()` / `db_cell_spec_color()`：仅当单元格内 ID 数与“SKU规格”项数严格相等时，按位置取颜色写入 `spec_color`，顺序对不齐就不猜；匹配状态显示为 `SKU_ID（卡其）`。
+- 货号日期兜底（`PRODUCT_NO_POLYESTER_FALLBACK_START = 2026-07-01`）与匹配优先级不变，数据库命中优先。
+
+改动匹配逻辑后除了跑自动测试，还建议做一次新旧对跑回归：`git show HEAD~1:领物做单器.pyw` 导出上一版源码，与当前版本同时导入，对同一份数据库的匹配键全量比对，确认“旧命中丢失 0、结果被改写 0”，只新增命中。
+
 ## 本地验证
 
 建议使用 Python 3.11 和可用的 Tk 显示环境。在仓库根目录执行；Mac 上将 `python` 换成实际使用的 `python3`：
@@ -51,7 +65,7 @@ git diff --check
 
 测试通过 AST 提取 GUI 类及必要的纯函数，使用真实 Tk 控件和虚构订单，不启动完整应用、不读取账号设置、不联网。缺少 Tk 显示环境时会跳过 GUI 测试；跳过不能视为界面验证通过。
 
-自动测试覆盖大图延迟加载、窗口缩放、滚轮及精密触控板位移、滚动到最后一单、空列表重新填充，以及两端的 VMI 数量、中文规格、刷新、长文本换行和选择状态。
+自动测试覆盖大图延迟加载、窗口缩放、滚轮及精密触控板位移、滚动到最后一单、空列表重新填充，以及两端的 VMI 数量、中文规格、刷新、长文本换行、选择状态和成分数据库多值单元格拆分、颜色对齐与旧行为回归。
 
 发布界面改动前，还应在目标运行环境逐项验收：
 
@@ -77,10 +91,10 @@ Windows EXE 是独立发布流程：工作流在推送 `v*` 标签或手动触�
 
 发现更新后仍显示旧版本时，先核对启动的应用副本和窗口标题中的版本号，再检查对应源码或 Release；不要通过删除登录态或设置来修复更新问题。Mac 的账号数据、设置位于 `~/Library/Application Support/领物做单器/`，Windows 的设置位于 `%LOCALAPPDATA%/领物做单器/settings.json`，均不属于源码更新内容。
 
-## 验证交接：2026-09-08
+## 验证交接：2026-09-15
 
-应用源码版本为 `2026.09.08.2`，已包含 Mac 卡片滚动修复、两端 VMI 逐 SKU 数量展示和顶部低余额提醒。
+应用源码版本为 `2026.09.15.1`，包含 Mac 卡片滚动修复、两端 VMI 逐 SKU 数量展示、顶部低余额提醒，以及成分数据库多值单元格拆分匹配。`v2026.09.15.1` 的 Windows 单文件 EXE 已由标签工作流构建并发布。
 
-- 已完成：Windows 主机上的两端语法检查、20 项自动 GUI 测试，以及每端 18 组低余额/顶部布局检查；源码更新地址已核对与提交内容一致。
-- 待完成：Mac 真机在有订单时验证触控板、大图、数量明细及顶部余额提示。Windows 上执行 Mac 源码的 Tk 测试不能替代 Mac 真机验收。
-- 独立 EXE 的发布、下载和升级不在这次源码更新验证范围内；不要据此宣称已发布同版本 EXE。
+- 已完成：Windows 主机上的两端语法检查、36 项自动测试（含两端成分匹配用例）；成分匹配改动另做了新旧对跑回归，23,003 个匹配键中旧命中丢失 0、结果被改写 0，新增命中 9,332 个。
+- 待完成：Mac 真机在有订单时验证触控板、大图、数量明细、顶部余额提示和成分匹配提交。Windows 上执行 Mac 源码的 Tk 测试不能替代 Mac 真机验收。
+- 已安装的 Mac `.app` 内部仍是旧源码，需要走应用内更新或重新打包，才能用上这一版。
