@@ -192,7 +192,7 @@ LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
 # 一格滚轮对应的滚动像素；Text/Canvas 用像素滚动，避免整张卡片一次跳过去
 SCROLL_PIXELS_PER_UNIT = 60
-APP_VERSION = "2026.09.15.1"
+APP_VERSION = "2026.09.26.1"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "macos/领物做单器.py"
@@ -2037,7 +2037,7 @@ class LandwuClient:
         order_id_text = str(order_id or "").strip()
         detail_id_text = str(order_detail_id or "").strip()
         if not order_id_text or not detail_id_text:
-            raise RuntimeError("删除订单明细缺少订单号或明细ID")
+            raise RuntimeError("删除订单明细缺少订单内部ID或明细ID，已阻止提交")
         return self.get("/order/delOrderDetail", {
             "order_id": order_id_text,
             "order_detail_id": detail_id_text,
@@ -2072,7 +2072,8 @@ class LandwuClient:
             current_quantity = 1
 
         if quantity == 0:
-            order_id = order_id or current.get("order_id") or edit_detail.get("order_id") or current.get("order_no")
+            # 删除接口需要内部订单 ID；不能使用 WB 开头的展示订单号。
+            order_id = current.get("order_id") or edit_detail.get("order_id") or order_id
             response = self.delete_order_detail(order_id=order_id, order_detail_id=order_detail_id)
             return {
                 "orderDetailId": str(order_detail_id),
@@ -2143,6 +2144,7 @@ class LandwuClient:
 
     def change_order_detail_quantities(self, items: list[dict[str, Any]], *, relation_type: int = 1) -> dict[str, Any]:
         live_detail_ids: set[str] = set()
+        live_order_ids: dict[str, Any] = {}
         for status in (1, 2):
             for row in self.iter_orders(status=status, limit=100):
                 for detail in row.get("detail") or []:
@@ -2151,6 +2153,7 @@ class LandwuClient:
                     detail_id = detail.get("id") or detail.get("order_detail_id") or detail.get("item_id")
                     if detail_id:
                         live_detail_ids.add(str(detail_id))
+                        live_order_ids[str(detail_id)] = detail.get("order_id") or row.get("order_id")
 
         results: list[dict[str, Any]] = []
         failed: list[dict[str, Any]] = []
@@ -2169,7 +2172,7 @@ class LandwuClient:
                     order_detail_id=order_detail_id,
                     target_quantity=item.get("target_quantity"),
                     relation_type=relation_type,
-                    order_id=item.get("order_no"),
+                    order_id=live_order_ids.get(order_detail_id),
                 )
                 result["orderNo"] = item.get("order_no")
                 results.append(result)

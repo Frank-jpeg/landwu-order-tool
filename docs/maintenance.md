@@ -33,6 +33,8 @@ Mac 的 `_scroll_target_pixels()` 将 Canvas 的 `yscrollincrement` 设为 1，�
 - 数量依次读取非空的 `buy_number`、`buyNumber`、`quantity`；0 件照实显示，缺失、负数或无效值显示“未返回”。无详情时显示“暂无 SKU 数量明细”。
 - 颜色和尺码沿用 `display_color_name()`、`display_size_name()`，只转换显示值。
 - “修改件数”仍通过原有弹窗提交；成功回调调用 `refresh_summary()`，卡片随服务端返回值重新绘制。
+- 数量改为 0 时调用 `/order/delOrderDetail`，`order_id` 必须使用内部订单 ID，不能传 `order_no`。优先读取最新编辑详情的 ID，缺失时回退到已校验的实时订单列表；仍缺失则阻止提交。正数继续使用原有数量保存接口。
+- `tests/test_order_detail_quantity_api.py` 离线验证两端删除参数、ID 回退、缺失 ID 拦截、订单状态变化、普通改量、相同数量跳过和空订单路径，不访问真实订单。
 
 ## 低余额提示
 
