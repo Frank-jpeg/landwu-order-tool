@@ -182,7 +182,7 @@ LOW_BALANCE_ALERT_THRESHOLD = 400.0
 SIZE_TARGET_OPTIONS = ("", "通用尺码", "涤纶", "棉", "人棉")
 # 触控板精密滚动累计多少像素算一格滚轮
 SCROLL_PIXELS_PER_UNIT = 60
-APP_VERSION = "2026.09.26.1"
+APP_VERSION = "2026.10.11.1"
 UPDATE_REPOSITORY = "Frank-jpeg/landwu-order-tool"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE_PATH = "领物做单器.pyw"
@@ -2060,8 +2060,9 @@ class LandwuClient:
             current_quantity = 1
 
         if quantity == 0:
-            # 删除接口需要内部订单 ID；不能使用 WB 开头的展示订单号。
-            order_id = current.get("order_id") or edit_detail.get("order_id") or order_id
+            # 删除接口要订单行的长内部订单 ID（如 2026...255）；getEditDetail/明细里的
+            # order_id 是短 ID（如 163986），传入会报“订单信息错误”。列表行 ID 优先。
+            order_id = order_id or current.get("order_id") or edit_detail.get("order_id")
             response = self.delete_order_detail(order_id=order_id, order_detail_id=order_detail_id)
             return {
                 "orderDetailId": str(order_detail_id),
@@ -2141,7 +2142,8 @@ class LandwuClient:
                     detail_id = detail.get("id") or detail.get("order_detail_id") or detail.get("item_id")
                     if detail_id:
                         live_detail_ids.add(str(detail_id))
-                        live_order_ids[str(detail_id)] = detail.get("order_id") or row.get("order_id")
+                        # 删除接口要订单行的长内部 ID；明细里的 order_id 是短 ID，仅作兜底。
+                        live_order_ids[str(detail_id)] = row.get("order_id") or detail.get("order_id")
 
         results: list[dict[str, Any]] = []
         failed: list[dict[str, Any]] = []

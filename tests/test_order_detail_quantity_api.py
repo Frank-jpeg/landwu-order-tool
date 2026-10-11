@@ -78,18 +78,29 @@ class WindowsQuantityApiTests(unittest.TestCase):
         self.assertTrue(result["results"][0]["deleted"])
         self.assert_delete()
 
-    def test_fresh_detail_id_takes_precedence_over_caller(self):
-        self.client.change_order_detail_quantity(order_detail_id=101, target_quantity=0, order_id="WB-TEST-OLD")
-        self.assert_delete()
+    def test_live_row_long_order_id_wins_over_edit_detail_short_id(self):
+        # 真实数据形态：列表行 order_id 是长内部 ID，明细/getEditDetail 里是短 ID。
+        self.rows[0]["order_id"] = "202610106139415815255"
+        self.rows[0]["detail"][0]["order_id"] = 163986
+        self.detail["data"]["order_id"] = 163986
+        self.client.change_order_detail_quantities([self.item])
+        self.assert_delete("202610106139415815255")
+
+    def test_caller_internal_id_takes_precedence_over_edit_detail(self):
+        self.client.change_order_detail_quantity(order_detail_id=101, target_quantity=0, order_id="888")
+        self.assert_delete(888)
 
     def test_top_level_edit_id_is_supported(self):
         del self.detail["data"]["order_id"]
         self.detail["order_id"] = 902
+        del self.rows[0]["order_id"]
+        del self.rows[0]["detail"][0]["order_id"]
         self.client.change_order_detail_quantities([self.item])
         self.assert_delete(902)
 
     def test_live_detail_id_is_fallback(self):
         del self.detail["data"]["order_id"]
+        del self.rows[0]["order_id"]
         self.rows[0]["detail"][0]["order_id"] = 903
         self.client.change_order_detail_quantities([self.item])
         self.assert_delete(903)
